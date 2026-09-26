@@ -53,13 +53,10 @@
 #define ID_HELP_TOPICS                  40041
 #define ID_HELP_TUTORIAL                40042
 #define ID_HELP_FORUM                   40043
-#define ID_HELP_UPDATE                  40044
 #define ID_HELP_UPGRADE                 40046
 #define ID_HELP_MIGRATION               40047
 #define ID_HELP_WHATSNEW				40049
 #define ID_HELP_CONTRIBUTION            40048
-#define ID_HELP_GET_CERT				40054
-#define ID_HELP_SET_CERT				40055
 #define ID_HELP_ABOUT                   40045
 #define ID_PROCESS_TERMINATE            40051
 #define ID_PROCESS_SETTINGS             40052

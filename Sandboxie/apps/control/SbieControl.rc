@@ -132,11 +132,7 @@ BEGIN
         //MENUITEM "3468",                        ID_HELP_MIGRATION
         MENUITEM "3457",                        ID_HELP_FORUM
         MENUITEM SEPARATOR
-        MENUITEM "3454",                        ID_HELP_UPDATE
         MENUITEM "3467",                        ID_HELP_UPGRADE
-        MENUITEM SEPARATOR
-        MENUITEM "3506",                        ID_HELP_GET_CERT
-        MENUITEM "3507",                        ID_HELP_SET_CERT
         MENUITEM SEPARATOR
         MENUITEM "3456",                        ID_HELP_ABOUT
     END
