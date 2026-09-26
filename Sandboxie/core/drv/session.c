@@ -348,8 +348,6 @@ _FX NTSTATUS Session_Api_Leader(PROCESS *proc, ULONG64 *parms)
 
         if (proc)
             status = STATUS_NOT_IMPLEMENTED;
-        else if (!MyIsCallerSigned()) 
-            status = STATUS_INVALID_SIGNATURE; // STATUS_ACCESS_DENIED
         else {
 
             session = Session_Get(TRUE, -1, &irql);
@@ -437,9 +435,6 @@ _FX NTSTATUS Session_Api_DisableForce(PROCESS *proc, ULONG64 *parms)
     in_flag = args->set_flag.val;
     if (in_flag) {
 
-        if (!MyIsCallerSigned())
-            return STATUS_ACCESS_DENIED;
-
         ProbeForRead(in_flag, sizeof(ULONG), sizeof(ULONG));
         ULONG in_flag_value = *in_flag;
         if (in_flag_value) {
@@ -522,9 +517,6 @@ _FX NTSTATUS Session_Api_ForceChildren(PROCESS *proc, ULONG64 *parms)
 
     if (proc)
         return STATUS_NOT_IMPLEMENTED;
-
-    if (!MyIsCallerSigned())
-        return STATUS_ACCESS_DENIED;
 
     process_id = (HANDLE)parms[1];
 

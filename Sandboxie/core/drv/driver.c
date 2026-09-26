@@ -217,9 +217,6 @@ _FX NTSTATUS DriverEntry(
     if (ok)
         ok = Driver_FindHomePath(RegistryPath);
 
-    if (ok)
-        MyValidateCertificate();
-
     //
     // initialize simple utility modules.  these don't hook anything
     //

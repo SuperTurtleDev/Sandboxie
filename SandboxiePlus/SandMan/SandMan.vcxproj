@@ -498,7 +498,6 @@
     <ClCompile Include="Windows\SelectBoxWindow.cpp" />
     <ClCompile Include="Windows\SettingsWindow.cpp" />
     <ClCompile Include="Windows\SnapshotsWindow.cpp" />
-    <ClCompile Include="Windows\SupportDialog.cpp" />
     <ClCompile Include="Wizards\BoxAssistant.cpp" />
     <ClCompile Include="Wizards\NewBoxWizard.cpp" />
     <ClCompile Include="Wizards\SetupWizard.cpp" />
@@ -518,7 +517,6 @@
     <QtMoc Include="Wizards\NewBoxWizard.h" />
     <QtMoc Include="OnlineUpdater.h" />
     <QtMoc Include="Views\FileView.h" />
-    <QtMoc Include="Windows\SupportDialog.h" />
     <QtMoc Include="Wizards\SetupWizard.h" />
     <QtMoc Include="Windows\SelectBoxWindow.h" />
     <QtMoc Include="Views\TraceView.h" />

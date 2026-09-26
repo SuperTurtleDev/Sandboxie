@@ -103,19 +103,6 @@ BOOLEAN MyIsTestSigning(void);
 
 
 //
-// return TRUE if current process has a valid custom signature
-//
-
-BOOLEAN MyIsCallerSigned(void);
-
-
-//
-// Validate supporter certificate
-//
-
-NTSTATUS MyValidateCertificate(void);
-
-//
 // misc helpers
 //
 

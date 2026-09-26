@@ -37,7 +37,6 @@
 #include "core/drv/api_defs.h"
 #include <time.h>
 #include "core/svc/InteractiveWire.h"
-#include "core/drv/verify.h"
 
 
 
@@ -283,82 +282,7 @@ bool DoAboutDialog(bool bReminder)
     g_bReminder = bReminder;
 
     if (g_bReminder) {
-
-        __declspec(align(8)) SCertInfo CertInfo = { 0 };
-        SbieApi_QueryDrvInfo(-1, &CertInfo, sizeof(CertInfo));
-        if (CertInfo.active)
-            return true;
-
-        time_t InstallDate = 0;
-        SbieApi_Call(API_GET_SECURE_PARAM, 3, L"InstallationDate", (ULONG_PTR)&InstallDate, sizeof(InstallDate));
-
-        time_t CurrentTime;
-        time(&CurrentTime);
-
-        if (InstallDate == 0 || InstallDate > CurrentTime) {
-            InstallDate = CurrentTime;
-            SbieApi_Call(API_SET_SECURE_PARAM, 3, L"InstallationDate", (ULONG_PTR)&InstallDate, sizeof(InstallDate));
-        }
-
-        Days = (int)((CurrentTime - InstallDate) / (24 * 3600));
-
-        if (!SbieApi_QueryConfBool(L"GlobalSettings", L"AlwaysShowReminder", FALSE)) {
-
-            if (Days < 40)
-                return true;
-
-		    int Interval = 30 * 24; // in hours
-
-		    USHORT ReminderShedule[2 * 11] = {
-		    //  days,	itnerval,	
-			    730,	     12,
-			    365,	 1 * 24,
-			    182,	 5 * 24,
-			    30,		30 * 24,
-			    0
-		    };
-		    USHORT CurReminderRevision = 1;
-
-		    USHORT ReminderRevision = 0;
-            SbieApi_Call(API_GET_SECURE_PARAM, 3, L"ReminderRevision", (ULONG_PTR)&ReminderRevision, sizeof(ReminderRevision));
-		    if (ReminderRevision < CurReminderRevision) {
-                SbieApi_Call(API_SET_SECURE_PARAM, 3, L"ReminderShedule", (ULONG_PTR)&ReminderShedule, sizeof(ReminderShedule));
-                SbieApi_Call(API_SET_SECURE_PARAM, 3, L"ReminderRevision", (ULONG_PTR)&ReminderRevision, sizeof(ReminderRevision));
-		    }
-		    else if (ReminderRevision > CurReminderRevision)
-                SbieApi_Call(API_GET_SECURE_PARAM, 3, L"ReminderShedule", (ULONG_PTR)&ReminderShedule, sizeof(ReminderShedule));
-
-            for (USHORT* Cur = ReminderShedule; (ULONG_PTR)Cur < (ULONG_PTR)ReminderShedule + sizeof(ReminderShedule) && *Cur != 0; Cur += 2) {
-				if (Days > Cur[0]) {
-					if (Cur[1] < Interval) Interval = Cur[1];
-					break;
-				}
-			}
-
-			time_t LastReminder = 0;
-            SbieApi_Call(API_GET_SECURE_PARAM, 3, L"LastReminder", (ULONG_PTR)&LastReminder, sizeof(LastReminder));
-			if (LastReminder > 0 && LastReminder < CurrentTime) {
-				if (CurrentTime - LastReminder < (time_t(Interval) * 3600))
-					return true;
-			}
-
-            if ((rand() % 5) != 0)
-                return true;
-        }
-
-        ULONG req = -1;
-        ULONG* rpl;
-	    rpl = (ULONG*)SbieDll_CallServerQueue(INTERACTIVE_QUEUE_NAME, &req, sizeof(req), sizeof(*rpl));
-	    if (rpl)
-	    {
-            ULONG status = rpl[0];
-            ULONG retval = rpl[1];
-		    SbieDll_FreeMem(rpl);
-
-            return !!retval;
-	    }
-
-	    SbieApi_Call(API_SET_SECURE_PARAM, 3, L"LastReminder", (ULONG_PTR)&CurrentTime, sizeof(CurrentTime));
+        return true;
     }
 
     if (! initialized) {

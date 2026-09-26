@@ -24,8 +24,6 @@
 #include "util.h"
 #include "process.h"
 #include "common/my_version.h"
-#define KERNEL_MODE
-#include "verify.h"
 
 
 //---------------------------------------------------------------------------
@@ -517,61 +515,6 @@ _FX BOOLEAN MyIsTestSigning(void)
             return TRUE;
 	}
     return FALSE;
-}
-
-
-//---------------------------------------------------------------------------
-// MyIsCallerSigned
-//---------------------------------------------------------------------------
-
-
-_FX BOOLEAN MyIsCallerSigned(void)
-{
-    NTSTATUS status;
-
-    // in test signing mode don't verify the signature
-    if (Driver_OsTestSigning)
-        return TRUE;
-
-    // if this is a node locked develoepr certificate don't verify the signature
-    if (Verify_CertInfo.type == eCertDeveloper && Verify_CertInfo.active)
-        return TRUE;
-
-    status = KphVerifyCurrentProcess();
-
-    //DbgPrint("Image Signature Verification result: 0x%08x\r\n", status);
-
-    if (!NT_SUCCESS(status)) {
-
-        //Log_Status(MSG_1330, 0, status);
-
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-
-//---------------------------------------------------------------------------
-// MyValidateCertificate
-//---------------------------------------------------------------------------
-
-NTSTATUS KphValidateCertificate();
-
-extern wchar_t g_uuid_str[40];
-void InitFwUuid();
-
-_FX NTSTATUS MyValidateCertificate(void)
-{
-    if(!*g_uuid_str)
-        InitFwUuid();
-
-    NTSTATUS status = KphValidateCertificate();
-
-    if (status == STATUS_ACCOUNT_EXPIRED)
-        status = STATUS_SUCCESS;
-
-    return status;
 }
 
 

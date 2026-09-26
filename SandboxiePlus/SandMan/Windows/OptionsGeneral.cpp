@@ -13,43 +13,6 @@
 #include "../Views/SbieView.h"
 #include "../../../SandboxieTools/ImBox/ImBox.h"
 
-class CCertBadge: public QLabel
-{
-public:
-	CCertBadge(bool bAdvanced, QWidget* parent = NULL): QLabel(parent) 
-	{
-		m_bAdvanced = bAdvanced;
-		setPixmap(QPixmap(":/Actions/Cert.png").scaled(16, 16, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-		if(bAdvanced)
-			setToolTip(COptionsWindow::tr("This option requires an active <b>advanced</b> supporter certificate"));
-		else
-			setToolTip(COptionsWindow::tr("This option requires an active supporter certificate"));
-		setCursor(Qt::PointingHandCursor);
-	}
-
-protected:
-	void mousePressEvent(QMouseEvent* event)
-	{
-		if(m_bAdvanced && g_CertInfo.active)
-			theGUI->OpenUrl(QUrl("https://sandboxie-plus.com/go.php?to=sbie-upgrade-cert"));
-		else
-			theGUI->OpenUrl(QUrl("https://sandboxie-plus.com/go.php?to=sbie-get-cert"));
-	}
-	bool m_bAdvanced;
-};
-
-void COptionsWindow__AddCertIcon(QWidget* pOriginalWidget, bool bAdvanced = false)
-{
-	QWidget* pWidget = new QWidget();
-	QHBoxLayout* pLayout = new QHBoxLayout(pWidget);
-	pLayout->setContentsMargins(0, 0, 0, 0);
-	pLayout->setSpacing(0);
-	pLayout->addWidget(new CCertBadge(bAdvanced));
-	pLayout->setAlignment(Qt::AlignLeft);
-	pOriginalWidget->parentWidget()->layout()->replaceWidget(pOriginalWidget, pWidget);
-	pLayout->insertWidget(0, pOriginalWidget);
-}
-
 void COptionsWindow::CreateGeneral()
 {
 	ui.cmbBoxIndicator->addItem(tr("Don't alter the window title"), "-");
@@ -89,37 +52,6 @@ void COptionsWindow::CreateGeneral()
 	ui.cmbBoxType->addItem(theGUI->GetBoxIcon(CSandBoxPlus::eAppBox), tr("Application Compartment"), (int)CSandBoxPlus::eAppBox);
 
 	connect(ui.lblBoxInfo, SIGNAL(linkActivated(const QString&)), theGUI, SLOT(OpenUrl(const QString&)));
-
-	ui.lblSupportCert->setVisible(false);
-	if (!g_CertInfo.active)
-	{
-		ui.lblSupportCert->setVisible(true);
-		connect(ui.lblSupportCert, SIGNAL(linkActivated(const QString&)), theGUI, SLOT(OpenUrl(const QString&)));
-
-		for (int i = 0; i < ui.cmbBoxType->count(); i++)
-		{
-			int BoxType = ui.cmbBoxType->itemData(i, Qt::UserRole).toInt();
-			bool disabled = BoxType != CSandBoxPlus::eDefault;
-
-			QStandardItemModel* model = qobject_cast<QStandardItemModel*>(ui.cmbBoxType->model());
-			QStandardItem* item = model->item(i);
-			item->setFlags(disabled ? item->flags() & ~Qt::ItemIsEnabled : item->flags() | Qt::ItemIsEnabled);
-		}
-	}
-
-	if (!g_CertInfo.opt_sec) {
-		QWidget* ExWidgets[] = { ui.chkSecurityMode, ui.chkLockDown, ui.chkRestrictDevices, ui.chkPrivacy, ui.chkUseSpecificity, ui.chkNoSecurityIsolation, ui.chkNoSecurityFiltering, ui.chkHostProtect, NULL };
-		for (QWidget** ExWidget = ExWidgets; *ExWidget != NULL; ExWidget++)
-			COptionsWindow__AddCertIcon(*ExWidget);
-	}
-	if (!g_CertInfo.active)
-		COptionsWindow__AddCertIcon(ui.chkRamBox, true);
-	if (!g_CertInfo.opt_enc) {
-		COptionsWindow__AddCertIcon(ui.chkConfidential, true);
-		COptionsWindow__AddCertIcon(ui.chkEncrypt, true);
-		COptionsWindow__AddCertIcon(ui.chkAllowEfs, true);
-	}
-
 
 	m_HoldBoxType = false;
 
@@ -992,9 +924,6 @@ void COptionsWindow::UpdateBoxSecurity()
 
 void COptionsWindow::OnSecurityMode()
 {
-	if (ui.chkSecurityMode->isChecked() || (ui.chkLockDown->isEnabled() && ui.chkLockDown->isChecked()) || (ui.chkRestrictDevices->isEnabled() && ui.chkRestrictDevices->isChecked()))
-		theGUI->CheckCertificate(this, 0);
-
 	UpdateBoxSecurity();
 
 	if (sender() == ui.chkSecurityMode && !ui.chkSecurityMode->isChecked()) {
@@ -1302,11 +1231,6 @@ void COptionsWindow::OnVmRead()
 
 void COptionsWindow::OnDiskChanged()
 {
-	if (sender() == ui.chkEncrypt) {
-		if (ui.chkEncrypt->isChecked())
-			theGUI->CheckCertificate(this, 1);
-	}
-
 	if (ui.chkRamBox->isChecked()) {
 		ui.chkEncrypt->setEnabled(false);
 		ui.chkEncrypt->setChecked(false);

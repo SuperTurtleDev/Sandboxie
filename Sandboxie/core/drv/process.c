@@ -38,8 +38,6 @@
 #include "thread.h"
 #include "wfp.h"
 #include "common/my_version.h"
-#define KERNEL_MODE
-#include "verify.h"
 #include "dyn_data.h"
 #include <fltKernel.h>
 
@@ -774,58 +772,7 @@ _FX PROCESS *Process_Create(
     proc->use_privacy_mode = Conf_Get_Boolean(proc->box->name, L"UsePrivacyMode", 0, FALSE); 
     proc->use_rule_specificity = proc->restrict_devices || proc->use_privacy_mode || Conf_Get_Boolean(proc->box->name, L"UseRuleSpecificity", 0, FALSE); 
 #endif
-    proc->confidential_box = Conf_Get_Boolean(proc->box->name, L"ConfidentialBox", 0, FALSE); 
-
-    //
-    // check certificate
-    //
-
-    if (!(Verify_CertInfo.active && Verify_CertInfo.opt_sec) && !proc->image_sbie) {
-
-        const WCHAR* exclusive_setting = NULL;
-        if (proc->use_security_mode)
-            exclusive_setting = L"UseSecurityMode";
-        else if (proc->is_locked_down)
-            exclusive_setting = L"SysCallLockDown";
-        else if (proc->restrict_devices)
-            exclusive_setting = L"RestrictDevices";
-        else
-#ifdef USE_MATCH_PATH_EX
-        if (proc->use_rule_specificity)
-            exclusive_setting = L"UseRuleSpecificity";
-        else if (proc->use_privacy_mode)
-            exclusive_setting = L"UsePrivacyMode";
-        else
-#endif
-        if (proc->bAppCompartment)
-            exclusive_setting = L"NoSecurityIsolation";
-        else if (proc->protect_host_images)
-            exclusive_setting = L"ProtectHostImages";
-
-        if (exclusive_setting) {
-
-            Log_Msg_Process(MSG_6004, proc->box->name, exclusive_setting, box->session_id, proc->pid);
-
-            // allow the process to run for a sort while to allow the features to be evaluated
-            Process_ScheduleKill(proc, 5*60*1000); // 5 minutes
-        }
-    }
-
-    if (!(Verify_CertInfo.active && Verify_CertInfo.opt_enc) && !proc->image_sbie) {
-        
-        const WCHAR* exclusive_setting = NULL;
-        if (proc->confidential_box)
-            exclusive_setting = L"ConfidentialBox";
-
-        if (exclusive_setting) {
-
-            Log_Msg_Process(MSG_6009, proc->box->name, exclusive_setting, box->session_id, proc->pid);
-
-            Pool_Delete(pool);
-            Process_CreateTerminated(ProcessId, box->session_id);
-            return NULL;
-        }
-    }
+    proc->confidential_box = Conf_Get_Boolean(proc->box->name, L"ConfidentialBox", 0, FALSE);
 
     //
     // If we don't have valid Dyndata, we force NoSecurityIsolation=y on all boxes
@@ -1296,17 +1243,13 @@ _FX BOOLEAN Process_NotifyProcess_Create(
         BOX* breakout_box = NULL;
 
         if (box && Process_IsBreakoutProcess(box, ImagePath)) {
-            if(!Verify_CertInfo.active)
-                Log_Msg_Process(MSG_6004, box->name, L"BreakoutProcess", box->session_id, CallerId);
-            else {
-                UNICODE_STRING image_uni;
-                RtlInitUnicodeString(&image_uni, ImagePath);
-                if (!Box_IsBoxedPath(box, file, &image_uni)) {
+            UNICODE_STRING image_uni;
+            RtlInitUnicodeString(&image_uni, ImagePath);
+            if (!Box_IsBoxedPath(box, file, &image_uni)) {
 
-                    check_forced_program = TRUE; // the breakout process of one box may be the forced process of another
-                    breakout_box = box;
-                    box = NULL;
-                }
+                check_forced_program = TRUE; // the breakout process of one box may be the forced process of another
+                breakout_box = box;
+                box = NULL;
             }
         }
 #endif

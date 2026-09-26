@@ -23,9 +23,6 @@ int main(int argc, char *argv[])
 	*wcsrchr(szPath, L'\\') = L'\0';
 	QString AppDir = QString::fromWCharArray(szPath);
 
-	if (QFile::exists(AppDir + "\\Certificate.dat"))
-		CSettingsWindow::LoadCertificate(AppDir + "\\Certificate.dat");
-
 	// use AppFolder/PlusData when present, else fallback to AppFolder
 	QString ConfDir = AppDir + "\\PlusData";
 	if(!QFile::exists(ConfDir))

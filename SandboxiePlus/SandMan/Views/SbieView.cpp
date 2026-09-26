@@ -921,7 +921,7 @@ void CSbieView::UpdateMoveMenu()
 	//	m_pGroupTree->addTopLevelItem(pItem);
  //   }
 
-	bool bPlus = (theAPI->GetFeatureFlags() & CSbieAPI::eSbieFeatureCert) != 0;
+	bool bPlus = true;
 	QIcon Icon = QIcon(bPlus ? ":/Boxes/Group2" : ":/Boxes/Group"); // theGUI->GetBoxIcon(CSandBoxPlus::eDefault, false);
 
 	QMap<QString, QTreeWidgetItem*> Map;

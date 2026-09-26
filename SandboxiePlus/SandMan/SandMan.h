@@ -112,23 +112,16 @@ public:
 	QIcon				MakeIconBusy(const QIcon& Icon, int Index = 0);
 	QIcon				IconAddOverlay(const QIcon& Icon, const QString& Name, int Size = 24);
 	QString				GetBoxDescription(int boxType);
-	
-	bool				SetCertificate(const QByteArray& Certificate);
-	bool				CheckCertificate(QWidget* pWidget, int iType = 0);
 
 	bool				IsAlwaysOnTop() const;
 
 	void				UpdateTheme();
 	void				UpdateTitleTheme(const HWND& hwnd);
 
-	SB_STATUS			ReloadCert(QWidget* pWidget = NULL);
-
 	void				SaveMessageLog(QIODevice* pFile);
 
 signals:
 	void				DrivesChanged();
-
-	void				CertUpdated();
 
 	void				Closed();
 
@@ -148,8 +141,6 @@ protected:
 
 	QIcon				GetTrayIcon(bool isConnected = true, bool bSun = false);
 	QString				GetTrayText(bool isConnected = true);
-
-	void				CheckSupport();
 
 	void				closeEvent(QCloseEvent* e);
 	void				changeEvent(QEvent* e);
@@ -232,7 +223,6 @@ public slots:
 	void				OnCancelAsync();
 
 	void				OnBoxAdded(const CSandBoxPtr& pBox);
-	void				OnBoxOpened(const CSandBoxPtr& pBox);
 	void				OnBoxClosed(const CSandBoxPtr& pBox);
 	void				OnBoxCleaned(CSandBoxPlus* pBoxEx);
 
@@ -288,8 +278,6 @@ private slots:
 
 	void				OnSymbolStatus(const QString& Message);
 
-	void				CheckForUpdates(bool bManual = true);
-
 	void				OnRestartAsAdmin();
 
 	void				OnExit();
@@ -302,8 +290,6 @@ private slots:
 
 	void				SetUITheme();
 	void				SetTitleTheme(const HWND& hwnd);
-
-    void				OnCertData(const QByteArray& Certificate, const QVariantMap& Params);
 
 	void				AddLogMessage(const QString& Message);
 	void				AddFileRecovered(const QString& BoxName, const QString& FilePath);
@@ -399,7 +385,6 @@ private:
 	QAction*			m_pDisableForce2;
 	QAction*			m_pDisableRecovery;
 	QAction*			m_pDisableMessages;
-	QAction*			m_pDismissUpdate;
 	QMenu*				m_pMaintenance;
 	QAction*			m_pConnect;
 	QAction*			m_pDisconnect;
@@ -459,7 +444,6 @@ private:
 	QAction*			m_pContribution;
 	QAction*			m_pForum;
 	QAction*			m_pManual;
-	QAction*			m_pUpdate;
 	QAction*			m_pAbout;
 	QAction*			m_pAboutQt;
 
@@ -498,8 +482,6 @@ private:
 	CPopUpWindow*		m_pPopUpWindow;
 
 	bool				m_StartMenuUpdatePending;
-	quint64				m_LastCheckInternetMs;
-	bool				m_bHasInternet;
 public:
 	QMap<QString, QPair<QString, QIcon>> m_TrayIconCache; // boxName -> (configKey, icon)
 	bool				m_ThemeUpdatePending;

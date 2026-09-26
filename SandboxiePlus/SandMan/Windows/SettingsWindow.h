@@ -53,17 +53,6 @@ public:
 	static void RemoveContextMenu();
 	static bool AddBrowserIcon();
 
-	static bool ApplyCertificate(const QByteArray &Certificate, QWidget* widget);
-	static void LoadCertificate(QString CertPath = QString());
-	static bool	TryRefreshCert(QWidget* parent, QObject* receiver, const char* member);
-	static bool	CertRefreshRequired();
-
-	static QString GetCertType();
-	static QColor GetCertColor();
-	static QString GetCertLevel();
-
-	static void StartEval(QWidget* parent, QObject* receiver, const char* member);
-
 	void LoadCompletionConsent();
 	void SaveCompletionConsent();
 	QString localizedCompletionShortcut();
@@ -155,19 +144,6 @@ private slots:
 	void OnCancelEdit();
 
 
-	void CertChanged();
-	void KeyChanged();
-	void UpdateCert();
-	void OnGetCert();
-	void OnCertData(const QByteArray& Certificate, const QVariantMap& Params);
-	void ApplyCert();
-	void UpdateUpdater();
-	void OnStartEval();
-
-	void GetUpdates();
-	void OnUpdateData(const QVariantMap& Data, const QVariantMap& Params);
-	void OnUpdate(const QString& Channel);
-
 	void OnSetTree();
 
 	void OnSelectIniEditFont();
@@ -200,8 +176,6 @@ protected:
 	void UpdateAutoCompletion();
 	void ApplyAutoCompletionMode(int state);
 
-	void	InitSupport();
-
 	bool	m_bRebuildUI;
 	bool	m_HoldChange;
 	CPendingChanges m_PendingChanges{this, &m_HoldChange, -1, true};
@@ -218,8 +192,6 @@ protected:
 	bool	m_ProtectionChanged;
 	bool	m_GeneralChanged;
 	bool	m_FeaturesChanged;
-	bool	m_CertChanged;
-	QVariantMap m_UpdateData;
 
 private:
 
@@ -246,12 +218,3 @@ QString MakeRunEntry(const QVariantMap& Entry);
 void WindowsMoveFile(const QString& from, const QString& to);
 
 extern quint32 g_FeatureFlags;
-
-extern QByteArray g_Certificate;
-
-#include "..\..\Sandboxie\core\drv\verify.h"
-
-extern SCertInfo g_CertInfo;
-
-#define EVAL_MAX 3		// for UI only actual limits enforced on server
-#define EVAL_DAYS 10	

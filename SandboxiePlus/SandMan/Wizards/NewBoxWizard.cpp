@@ -543,16 +543,11 @@ void CBoxTypePage::OnBoxTypChanged()
 {
 #ifndef USE_COMBO
     int BoxType = m_TypeGroup->checkedId();
-    bool BlackBox = field("blackBox").toBool();
 #else
 	int BoxType = m_pBoxType->currentData().toInt();
-    bool BlackBox = CSandBoxPlus::ePrivate;
 
 	m_pInfoLabel->setText(theGUI->GetBoxDescription(BoxType));
 #endif
-
-    if(BoxType != CSandBoxPlus::eDefault || BlackBox)
-		theGUI->CheckCertificate(this, BlackBox ? 1 : 0);
 
     emit completeChanged();
 }
@@ -934,7 +929,6 @@ CAdvancedPage::CAdvancedPage(QWidget *parent)
     QCheckBox* pImageProtection = new QCheckBox(tr("Prevent sandboxed programs on the host from loading sandboxed DLLs"));
     pImageProtection->setToolTip(tr("This feature may reduce compatibility as it also prevents box located processes from writing to host located ones and even starting them."));
     pImageProtection->setChecked(theConf->GetBool("BoxDefaults/ImagesProtection", false));
-    pImageProtection->setEnabled(g_CertInfo.active);
     layout->addWidget(pImageProtection, row++, 1, 1, 3);
     registerField("imagesProtection", pImageProtection);
 

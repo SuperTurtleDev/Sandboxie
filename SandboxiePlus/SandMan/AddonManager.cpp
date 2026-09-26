@@ -22,12 +22,7 @@ CAddonManager::CAddonManager(QObject* parent)
 
 void CAddonManager::UpdateAddonsWhenNotCached()
 {
-	QVariantMap Data = theGUI->m_pUpdater->GetUpdateData();
-	if (!Data.isEmpty() && Data.contains("addons") && theGUI->m_pUpdater->GetLastUpdateTime() > QDateTime::currentDateTime().addDays(-1)) {
-		OnUpdateData(Data, QVariantMap());
-		return;
-	}
-	else if (!m_KnownAddons.isEmpty()) {
+	if (!m_KnownAddons.isEmpty()) {
 		QFileInfo info(theConf->GetConfigDir() + "/" ADDONS_FILE);
 		if (info.birthTime() > QDateTime::currentDateTime().addDays(-1))
 			return;
@@ -224,8 +219,6 @@ SB_PROGRESS CAddonManager::RemoveAddon(const QString& Id)
 	return SB_PROGRESS(OP_ASYNC, pAddon->pProgress);
 }
 
-QString GetUpdErrorStr(int exitCode);
-
 QString GetUpdErrorStr2(int exitCode)
 {
 	switch (exitCode)
@@ -235,7 +228,7 @@ QString GetUpdErrorStr2(int exitCode)
 	case ERROR_BAD_ADDON: return CAddonManager::tr("Missing installation instructions");
 	case ERROR_BAD_ADDON2: return CAddonManager::tr("Executing add-on setup failed");
 	case ERROR_DELETE: return CAddonManager::tr("Failed to delete a file during add-on removal");
-	default: return GetUpdErrorStr(exitCode);
+	default: return CAddonManager::tr("Unknown error: %1").arg(exitCode);
 	}
 }
 

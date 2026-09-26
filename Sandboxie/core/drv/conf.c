@@ -1703,11 +1703,6 @@ _FX NTSTATUS Conf_Api_Reload(PROCESS *proc, ULONG64 *parms)
 
     flags = (ULONG)parms[2];
 
-    if (flags & SBIE_CONF_FLAG_RELOAD_CERT) {
-        status = MyValidateCertificate();
-        goto finish;
-    }
-
     //DbgPrint("Conf_Api_Reload\n");
 
     status = Conf_Read((ULONG)parms[1]);

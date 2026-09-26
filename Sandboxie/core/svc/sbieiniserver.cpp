@@ -139,19 +139,6 @@ MSG_HEADER *SbieIniServer::Handler2(MSG_HEADER *msg)
     if (NT_SUCCESS(status))     // if sandboxed
         return SHORT_REPLY(STATUS_NOT_SUPPORTED);
 
-    //
-    // Get/Set *.dat files in Sandboxie's home directory
-    //
-
-    if (msg->msgid == MSGID_SBIE_INI_SET_DAT) {
-
-        return SetDatFile(msg, idProcess);
-    }
-    //if (msg->msgid == MSGID_SBIE_INI_GET_DAT) {
-    //
-    //    return GetDatFile(msg, idProcess);
-    //}
-
     if (PipeServer::ImpersonateCaller(&msg) != 0)
         return msg;
 
@@ -1684,60 +1671,6 @@ NTSTATUS SbieIniServer::RunSbieCtrl(HANDLE hToken, const WCHAR* DeskName, const 
     }
 
     return status;
-}
-
-
-//---------------------------------------------------------------------------
-// SetDatFile
-//---------------------------------------------------------------------------
-
-
-MSG_HEADER *SbieIniServer::SetDatFile(MSG_HEADER *msg, HANDLE idProcess)
-{
-    HANDLE SessionLeaderPid;
-    SbieApi_SessionLeader(m_session_id, &SessionLeaderPid);
-    if (SessionLeaderPid != idProcess)
-        return SHORT_REPLY(STATUS_ACCESS_DENIED);
-
-    SBIE_INI_SETTING_REQ *req = (SBIE_INI_SETTING_REQ *)msg;
-    if (req->h.length < sizeof(SBIE_INI_SETTING_REQ))
-        return SHORT_REPLY(STATUS_INVALID_PARAMETER);
-
-    wchar_t* ext = wcsrchr(req->setting, L'.');
-    if (!ext || (_wcsicmp(ext, L".dat") != 0) || wcsstr(req->setting, L"..") != NULL)
-        return SHORT_REPLY(STATUS_INVALID_FILE_FOR_SECTION);
-
-    WCHAR path[768];
-    NTSTATUS status = SbieApi_GetHomePath(path, 768, NULL, 0);
-    if (!NT_SUCCESS(status))
-        return SHORT_REPLY(status);
-    wcscat(path, L"\\");
-    wcscat(path, req->setting);
-
-    UNICODE_STRING objname;
-    RtlInitUnicodeString(&objname, path);
-
-    OBJECT_ATTRIBUTES objattrs;
-    InitializeObjectAttributes(&objattrs, &objname, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    if (req->value_len == 0) {
-
-        NtDeleteFile(&objattrs);
-
-        return SHORT_REPLY(STATUS_SUCCESS);
-    }
-
-    HANDLE handle = INVALID_HANDLE_VALUE;
-    IO_STATUS_BLOCK IoStatusBlock;
-    status = NtCreateFile(&handle, FILE_GENERIC_WRITE, &objattrs, &IoStatusBlock,NULL, 0, FILE_SHARE_VALID_FLAGS, FILE_OVERWRITE_IF, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
-    if (NT_SUCCESS(status)) {
-
-        status = NtWriteFile(handle, NULL, NULL, NULL, &IoStatusBlock, req->value, req->value_len, NULL, NULL);
-
-        NtClose(handle);
-    }
-
-    return SHORT_REPLY(status);
 }
 
 

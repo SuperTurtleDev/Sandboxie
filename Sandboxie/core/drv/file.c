@@ -1371,10 +1371,6 @@ _FX NTSTATUS File_Generic_MyParseProc(
                 && 0 == Box_NlsStrCmp(
                     path, Driver_HomePathNt, Driver_HomePathNt_Len)) {
 
-            if(_wcsicmp(&path[Driver_HomePathNt_Len], L"\\Certificate.dat") == 0)
-                status = STATUS_ACCESS_DENIED;
-            else
-
             if (write_access)
                 status = STATUS_ACCESS_DENIED;
             else

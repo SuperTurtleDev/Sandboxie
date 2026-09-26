@@ -40,7 +40,6 @@
 #include "common/pattern.h"
 #include "common/str_util.h"
 #include "core/drv/api_defs.h"
-#include "core/drv/verify.h"
 
 
 //---------------------------------------------------------------------------
@@ -572,15 +571,6 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
         WSA_FilterEnabled = TRUE;
 
         map_init(&WSA_LookupMap, Dll_Pool);
-
-        __declspec(align(8)) SCertInfo CertInfo = { 0 };
-        if (!NT_SUCCESS(SbieApi_QueryDrvInfo(-1, &CertInfo, sizeof(CertInfo))) || !(CertInfo.active && CertInfo.opt_net)) {
-
-            const WCHAR* strings[] = { L"NetworkDnsFilter" , NULL };
-            SbieApi_LogMsgExt(-1, 6009, strings);
-
-            WSA_FilterEnabled = FALSE;
-        }
     }
 
     //

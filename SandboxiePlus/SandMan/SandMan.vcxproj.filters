@@ -153,9 +153,6 @@
     <ClCompile Include="SbieFindWnd.cpp">
       <Filter>SandMan</Filter>
     </ClCompile>
-    <ClCompile Include="Windows\SupportDialog.cpp">
-      <Filter>Windows</Filter>
-    </ClCompile>
     <ClCompile Include="SandManRecovery.cpp">
       <Filter>SandMan</Filter>
     </ClCompile>
@@ -365,9 +362,6 @@
     </QtMoc>
     <QtMoc Include="BoxMonitor.h">
       <Filter>SandMan</Filter>
-    </QtMoc>
-    <QtMoc Include="Windows\SupportDialog.h">
-      <Filter>Windows</Filter>
     </QtMoc>
     <QtMoc Include="Views\FileView.h">
       <Filter>Views</Filter>

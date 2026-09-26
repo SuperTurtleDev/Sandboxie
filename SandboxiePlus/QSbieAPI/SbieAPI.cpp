@@ -2180,11 +2180,6 @@ SB_STATUS CSbieAPI::ReloadConfig(bool ReconfigureDrv)
 	return ReloadConf(ReconfigureDrv ? SBIE_CONF_FLAG_RECONFIGURE : 0);
 }
 
-SB_STATUS CSbieAPI::ReloadCert()
-{
-	return ReloadConf(SBIE_CONF_FLAG_RELOAD_CERT);
-}
-
 SB_STATUS CSbieAPI::ReloadConf(quint32 flags, quint32 SessionId)
 {
 	__declspec(align(8)) ULONG64 parms[API_NUM_ARGS];
@@ -2263,26 +2258,6 @@ void CSbieAPI::ClearPassword()
 	m->Password.clear();
 }
 
-SB_STATUS CSbieAPI::SetDatFile(const QString& FileName, const QByteArray& Data)
-{
-	ULONG req_len = sizeof(SBIE_INI_SETTING_REQ) + Data.length();
-	SScoped<SBIE_INI_SETTING_REQ> req(malloc(req_len));
-	memset(req, 0, req_len);
-
-	req->h.msgid = MSGID_SBIE_INI_SET_DAT;
-
-	req->section[0] = L'\0'; // unused
-	FileName.toWCharArray(req->setting); // fix-me: potential overflow
-	req->setting[FileName.length()] = L'\0';
-	memcpy(req->value, Data, Data.length());
-	req->value_len = Data.length();
-	req->h.length = sizeof(SBIE_INI_SETTING_REQ) + req->value_len * sizeof(WCHAR);
-
-	SScoped<MSG_HEADER> rpl;
-	SB_STATUS Status = CallServer(&req->h, &rpl);
-	return Status;
-}
-
 //SB_RESULT(QByteArray) CSbieAPI::GetDatFile(const QString& FileName)
 //{
 //}
@@ -2346,20 +2321,8 @@ QString CSbieAPI::GetFeatureStr()
 		str.append("ObCB");		// Object Callbacks
 	if (flags & SBIE_FEATURE_FLAG_SBIE_LOGIN)
 		str.append("SbL");		// Sandboxie Login
-	if (flags & SBIE_FEATURE_FLAG_SECURITY_MODE)
-		str.append("SMod");		// Security Mode
-	if (flags & SBIE_FEATURE_FLAG_PRIVACY_MODE)
-		str.append("PMod");		// Privacy Mode
-	if (flags & SBIE_FEATURE_FLAG_COMPARTMENTS)
-		str.append("AppC");		// Application Compartment
 	if (flags & SBIE_FEATURE_FLAG_WIN32K_HOOK)
 		str.append("W32k");		// Win32 Hooks
-	if (flags & SBIE_FEATURE_FLAG_ENCRYPTION)
-		str.append("EBox");		// Encrypted Boxes
-	if (flags & SBIE_FEATURE_FLAG_NET_PROXY)
-		str.append("NetI");		// Network Interception
-	if (flags & SBIE_FEATURE_FLAG_NO_SIG)
-		str.append("DEV");		// Developer
 
 	return str.join(",");
 }

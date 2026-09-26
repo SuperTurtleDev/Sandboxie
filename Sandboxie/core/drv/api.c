@@ -962,11 +962,6 @@ _FX NTSTATUS Api_SetServicePort(PROCESS *proc, ULONG64 *parms)
         status = STATUS_SUCCESS;
     }
 
-    if (NT_SUCCESS(status) && !MyIsCallerSigned()) {
-    
-        status = STATUS_INVALID_SIGNATURE;
-    }
-
     //
     // take a reference on the specified LPC port object
     //
@@ -1122,8 +1117,6 @@ _FX NTSTATUS Api_ProcessExemptionControl(PROCESS *proc, ULONG64 *parms)
 
 	if (proc) // is caller sandboxed?
 		return STATUS_NOT_IMPLEMENTED;
-    else if (!MyIsCallerSigned()) 
-        status = STATUS_ACCESS_DENIED;
 
 	if (pArgs->process_id.val == 0)
 		return STATUS_INVALID_PARAMETER;
@@ -1210,24 +1203,6 @@ _FX NTSTATUS Api_QueryDriverInfo(PROCESS* proc, ULONG64* parms)
                 FeatureFlags |= SBIE_FEATURE_FLAG_WIN32K_HOOK;
 #endif
 
-            if (Verify_CertInfo.active)
-                FeatureFlags |= SBIE_FEATURE_FLAG_CERTIFIED;
-
-            if (Verify_CertInfo.opt_sec) {
-                FeatureFlags |= SBIE_FEATURE_FLAG_SECURITY_MODE;
-                FeatureFlags |= SBIE_FEATURE_FLAG_PRIVACY_MODE;
-                FeatureFlags |= SBIE_FEATURE_FLAG_COMPARTMENTS;
-            }
-
-            if (Verify_CertInfo.opt_enc)
-                FeatureFlags |= SBIE_FEATURE_FLAG_ENCRYPTION;
-
-            if (Verify_CertInfo.opt_net)
-                FeatureFlags |= SBIE_FEATURE_FLAG_NET_PROXY;
-
-            if (Verify_CertInfo.type == eCertDeveloper)
-                FeatureFlags |= SBIE_FEATURE_FLAG_NO_SIG;
-
             if (Dyndata_Active) {
 
                 FeatureFlags |= SBIE_FEATURE_FLAG_DYNDATA_OK;
@@ -1241,29 +1216,6 @@ _FX NTSTATUS Api_QueryDriverInfo(PROCESS* proc, ULONG64* parms)
 #endif
 
             *data = FeatureFlags;
-        }
-        else if (args->info_class.val == -1) {
-
-            ProbeForWrite(args->info_data.val, args->info_len.val, sizeof(ULONG));
-
-            if (args->info_len.val >= sizeof(ULONGLONG))
-                *((ULONGLONG*)args->info_data.val) = Verify_CertInfo.State;
-            else if (args->info_len.val == sizeof(ULONG))
-                *((ULONG*)args->info_data.val) = (ULONG)(Verify_CertInfo.State & 0xFFFFFFFF); // drop optional data
-            else
-                status = STATUS_BUFFER_TOO_SMALL;
-        }
-        else if (args->info_class.val == -2) {
-
-            if (args->info_len.val >= 37 * sizeof(wchar_t)) {
-                wchar_t* hwid = args->info_data.val;
-                ProbeForWrite(hwid, args->info_len.val, sizeof(wchar_t));
-
-                extern wchar_t g_uuid_str[40];
-                wmemcpy(hwid, g_uuid_str, 37);
-            }
-            else
-                status = STATUS_BUFFER_TOO_SMALL;
         }
         else
             status = STATUS_INVALID_INFO_CLASS;
@@ -1292,11 +1244,6 @@ _FX NTSTATUS Api_SetSecureParam(PROCESS* proc, ULONG64* parms)
 
     if (proc) {
         status = STATUS_NOT_IMPLEMENTED;
-        goto finish;
-    }
-
-    if (!MyIsCallerSigned()) {
-        status = STATUS_ACCESS_DENIED;
         goto finish;
     }
 

@@ -85,7 +85,6 @@ public:
 
 	// Config
 	virtual SB_STATUS		ReloadConfig(bool ReconfigureDrv = false);
-	virtual SB_STATUS		ReloadCert();
 	virtual void			CommitIniChanges();
 	virtual QString			SbieIniGet(const QString& Section, const QString& Setting, quint32 Index = 0, qint32* ErrCode = NULL, quint32* pType = NULL);
 	virtual QString			SbieIniGet2(const QString& Section, const QString& Setting, quint32 Index = 0, bool bWithGlobal = false, bool bNoExpand = true, bool withTemplates = false);
@@ -110,12 +109,9 @@ public:
 	{
 		eSbieFeatureWFP			= 0x00000001,
 		eSbieFeatureObCB		= 0x00000002,
-		eSbieFeaturePMod		= 0x00000004,
-		eSbieFeatureAppC		= 0x00000008,
 		eSbieFeatureSbiL		= 0x00000010,
 
-		eSbieFeatureARM64		= 0x40000000,
-		eSbieFeatureCert		= 0x80000000
+		eSbieFeatureARM64		= 0x40000000
 	};
 
 	virtual quint32			GetFeatureFlags();
@@ -167,9 +163,6 @@ public:
 	virtual SB_STATUS		GetSecureParam(const QString& Name, void* data, size_t size, quint32* size_out = NULL, bool bVerify = false);
 
 	virtual bool			TestSignature(const QByteArray& Data, const QByteArray& Signature);
-
-	virtual SB_STATUS		SetDatFile(const QString& FileName, const QByteArray& Data);
-	//virtual SB_RESULT(QByteArray) GetDatFile(const QString& FileName);
 
 
 	enum ESbieQueuedRequests

@@ -225,9 +225,6 @@ void CSandMan::CreateTrayMenu()
 	m_pTrayMenu->addAction(m_pDisableForce2);
 	if(m_pDisableRecovery) m_pTrayMenu->addAction(m_pDisableRecovery);
 	if(m_pDisableMessages) m_pTrayMenu->addAction(m_pDisableMessages);
-	m_pDismissUpdate = m_pTrayMenu->addAction(tr("Dismiss Update Notification"), this, SLOT(OnDismissUpdate()));
-	m_pDismissUpdate->setCheckable(true);
-	m_pDismissUpdate->setVisible(false);
 	m_pTrayMenu->addSeparator();
 
 	/*QWidgetAction* pBoxWidget = new QWidgetAction(m_pTrayMenu);
@@ -741,7 +738,7 @@ void CSandMan::CreateBoxMenu(QMenu* pMenu, int iOffset, int iSysTrayFilter)
 
 	QAction* pPos = pMenu->actions().at(iOffset);
 
-	bool bPlus = (theAPI->GetFeatureFlags() & CSbieAPI::eSbieFeatureCert) != 0;
+	bool bPlus = true;
 	QIcon Icon = QIcon(bPlus ? ":/Boxes/Group2" : ":/Boxes/Group"); // theGUI->GetBoxIcon(CSandBoxPlus::eDefault, false);
 
 	QList<CSandBoxPtr> Boxes = theAPI->GetAllBoxes().values(); // map is sorted by key (box name)
@@ -1109,7 +1106,6 @@ void CSandMan::OnSysTray(QSystemTrayIcon::ActivationReason Reason)
 
 				break;
 			}
-			CheckSupport();
 			show();
 		case QSystemTrayIcon::Trigger:
 			if (isVisible() && !TriggerSet)

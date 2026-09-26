@@ -36,7 +36,6 @@ HEADERS += ./stdafx.h \
     ./Windows/PendingChanges.h \
     ./Windows/EditorSettingsWindow.h \
     ./Windows/SelectBoxWindow.h \
-    ./Windows/SupportDialog.h \
     ./Windows/TestProxyDialog.h \
     ./OnlineUpdater.h \
     ./Wizards/NewBoxWizard.h \
@@ -95,7 +94,6 @@ SOURCES += ./main.cpp \
     ./Windows/SettingsWindow.cpp \
     ./Windows/SnapshotsWindow.cpp \
     ./Windows/SelectBoxWindow.cpp \
-    ./Windows/SupportDialog.cpp \
     ./Windows/TestProxyDialog.cpp \
     ./OnlineUpdater.cpp \
     ./Wizards/NewBoxWizard.cpp \

@@ -57,11 +57,6 @@ void COptionsWindow::CreateAccess()
 
 void COptionsWindow::OnAccessChangedEx()
 {
-	if (sender() == ui.chkPrivacy || sender() == ui.chkUseSpecificity) {
-		if (ui.chkPrivacy->isChecked() || (ui.chkUseSpecificity->isEnabled() && ui.chkUseSpecificity->isChecked()))
-			theGUI->CheckCertificate(this, 0);
-	}
-
 	UpdateAccessPolicy();
 
 	if ((sender() == ui.chkPrivacy || sender() == ui.chkRestrictDevices) && !(ui.chkPrivacy->isChecked() || ui.chkRestrictDevices->isChecked())) {
