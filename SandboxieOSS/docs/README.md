@@ -30,6 +30,17 @@ Sandboxie-OSS 是 Sandboxie-Plus 的 **GPLv3 纯用户空间替代组件**，用
 3. SbieDll.dll / SbieSvc.exe 随冻结一并不改（它们与驱动同源同签名批次构建）；新组件通过 `SandboxieOSS\build_oss.bat` 单独构建，统一构建 `SandboxieOSS\build_all.bat` 产出 `Installer\SbieOSS_x64\`（core 运行时 + sbie-cli + sbie-gui，构建链与 Plus 断开、签名解耦；见 `05-build.md`）。
 4. 若冻结期内发现必须改驱动的缺陷：记录到对应文档的"坑记录"区并挂起，统一在解冻后批量处理、一次签名。
 
+## V2 现行架构（2026-09-27 起，取代 00/04 中的 server 模型）
+
+> 00-architecture / 04-modules 描述的 **V1 server/client 模型已废除**（server 目录
+> 已删除）。现行 V2 按 [10-v2-design.md](10-v2-design.md) 实现：
+> **无 server、无常驻中枢**——CLI 短进程直连驱动 IOCTL；注册 = 主 ini 一条
+> `ImportBox=%LOCALAPPDATA%\\SandboxieOSS\\boxes\\` 目录通配 + 缓存文件放删 + `SbieApi_ReloadConf`；
+> 模板 = `SBIE_TEMPLATE_DIR` 用户态递归展开（树在 `SandboxieOSS\\templates\\`，
+> 400 文件迁移自官方 Templates.ini）；监视 = 每会话一个纯轮询公共 monitor
+> （任务文件约定，无 IPC）。命令面：`exec / register / unregister / sync-config /
+> ps / kill-box / kill / log`。唯一 SbieSvc 运行期依赖 = RunSandboxed/KillAll/KillOne。
+
 ## 文档索引
 
 | 文档 | 内容 |
@@ -40,6 +51,7 @@ Sandboxie-OSS 是 Sandboxie-Plus 的 **GPLv3 纯用户空间替代组件**，用
 | [03-svc-protocol.md](03-svc-protocol.md) | SbieSvc LPC 协议：端口名、MSG_HEADER、MSGID_SBIE_INI_* / PROCESS_* / QUEUE_* 全部请求/回复结构、分块传输、interactive queue 会话队列 |
 | [04-modules.md](04-modules.md) | 模块划分（SbieCore 静态库 / sbie-cli.exe / 共享 IPC 定义）、各模块对外接口契约（多 agent 并行开发用）、完整 CLI 命令树与输出格式规范 |
 | [05-build.md](05-build.md) | MSBuild 方案布局、统一构建 `build_all.bat`（core/Plus 步骤分类表、8 步流程、组装布局、决策记录）、`build_oss.bat`/`build_gui.bat`/`make_dist.bat`、输出到 `Installer\SbieOSS_x64\`、签名与构建解耦（KernelSigner 独立后续流程） |
+| [10-v2-design.md](10-v2-design.md) | **V2 现行架构**（无 server：用户态模板引擎 + ImportBox 目录通配注册 + 公共 monitor + 七命令面；V1 server/命令面已删）|
 
 ## 术语
 

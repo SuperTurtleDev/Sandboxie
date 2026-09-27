@@ -26,6 +26,9 @@ namespace sbie::svc {
 
 namespace {
 
+// RunSandboxed 最近一次服务端 win32 错误（LastRunSandboxedWin32 读取）
+ULONG s_lastRunWin32 = 0;
+
 // LPC 端口状态（SvcClient::Impl 的私有载荷；自由函数只依赖本结构）
 struct PortState {
     HANDLE port = nullptr;
@@ -583,15 +586,47 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
 {
     if (box.size() >= BOXNAME_COUNT)
         return SbieStatus::INVALID;
+    if (cmd.empty())
+        return SbieStatus::INVALID;
+
+    // 对齐 QSbieAPI（SbieAPI.cpp:1945-1946）：dir 空 = 调用方 cwd；
+    // env = 调用方环境块原样继承（MakeEnvironment(true) 语义）。空块会令
+    // 盒内进程在 SbieDll 初始化/运行期缺 %SystemRoot% 等而早夭（实测）。
+    std::wstring workDir = dir;
+    if (workDir.empty()) {
+        wchar_t cwd[MAX_PATH];
+        DWORD n = GetCurrentDirectoryW((DWORD)(sizeof(cwd) / sizeof(wchar_t)), cwd);
+        workDir = n && n < sizeof(cwd) / sizeof(wchar_t) ? std::wstring(cwd, n)
+                                                         : std::wstring(L"C:\\");
+    }
+
+    // 构造双 NUL 结尾的环境块（WCHAR）
+    std::vector<WCHAR> envBlock;
+    {
+        LPWCH env = GetEnvironmentStringsW();
+        if (env) {
+            LPWCH p = env;
+            while (*p) {
+                size_t len = wcslen(p);
+                envBlock.insert(envBlock.end(), p, p + len + 1);
+                p += len + 1;
+            }
+            FreeEnvironmentStringsW(env);
+        }
+        if (envBlock.empty())
+            envBlock.push_back(L'\0');   // 空环境：至少一个 NUL + 下方尾部 NUL
+    }
+
     // 变长区布局对齐 QSbieAPI（SbieAPI.cpp:1975-2000）：ofs = 字节偏移（相对
     // 结构体起点），len = WCHAR 数（不含结尾 NUL）；每段后随 NUL
     const size_t fixedLen = sizeof(PROCESS_RUN_SANDBOXED_REQ);
     const size_t cmdChars = cmd.size();
-    const size_t dirChars = dir.size();
+    const size_t dirChars = workDir.size();
+    const size_t envChars = envBlock.size();   // 含段间 NUL；不含公共尾部 NUL
     const size_t cmdOfs = fixedLen;
     const size_t dirOfs = cmdOfs + (cmdChars + 1) * sizeof(WCHAR);
     const size_t envOfs = dirOfs + (dirChars + 1) * sizeof(WCHAR);
-    const size_t reqLen = envOfs + sizeof(WCHAR); // 空 env：仅 NUL
+    const size_t reqLen = envOfs + (envChars + 1) * sizeof(WCHAR);
     PROCESS_RUN_SANDBOXED_REQ* req = (PROCESS_RUN_SANDBOXED_REQ*)calloc(1, reqLen);
     if (!req)
         return SbieStatus::GENERIC;
@@ -603,11 +638,13 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
     req->dir_ofs = (ULONG)dirOfs;
     req->dir_len = (ULONG)dirChars;
     req->env_ofs = (ULONG)envOfs;
-    req->env_len = 0;
+    req->env_len = (ULONG)envChars;
     memcpy((UCHAR*)req + cmdOfs, cmd.c_str(), (cmdChars + 1) * sizeof(WCHAR));
-    memcpy((UCHAR*)req + dirOfs, dir.c_str(), (dirChars + 1) * sizeof(WCHAR));
-    *(WCHAR*)((UCHAR*)req + envOfs) = L'\0';
-    req->si_flags = 0;
+    memcpy((UCHAR*)req + dirOfs, workDir.c_str(), (dirChars + 1) * sizeof(WCHAR));
+    if (envChars)
+        memcpy((UCHAR*)req + envOfs, envBlock.data(), envChars * sizeof(WCHAR));
+    *(WCHAR*)((UCHAR*)req + envOfs + envChars * sizeof(WCHAR)) = L'\0';
+    req->si_flags = STARTF_FORCEOFFFEEDBACK;
     req->si_show_window = 1; // SW_SHOWNORMAL
     req->creation_flags = creationFlags;
 
@@ -620,16 +657,22 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
     PROCESS_RUN_SANDBOXED_RPL* r = (PROCESS_RUN_SANDBOXED_RPL*)rpl;
     if (r->h.status != 0) {
         // 该消息的 status 为 win32 错误（03 §4 / sbieiniwire 惯例）
-        st = SbieStatus::GENERIC;
+        s_lastRunWin32 = r->h.status;
         free(rpl);
-        return st;
+        return SbieStatus::GENERIC;
     }
+    s_lastRunWin32 = 0;
     out->hProcess = (HANDLE)(ULONG_PTR)r->hProcess;
     out->pid = r->dwProcessId;
     if (r->hThread)
         CloseHandle((HANDLE)(ULONG_PTR)r->hThread); // hThread 本项目暂不留用
     free(rpl);
     return SbieStatus::OK;
+}
+
+ULONG SvcClient::LastRunSandboxedWin32()
+{
+    return s_lastRunWin32;
 }
 
 // ---------------------------------------------------------------------------

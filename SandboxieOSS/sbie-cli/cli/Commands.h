@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Sandboxie-OSS contributors
 //
-// M1 直连命令：version / status / box list / proc list（04 §4.1/§4.3/§4.4，
-// 全部属 §5 可降级直连表）。其余命令注册为未实现桩（server/Svc 波次）。
+// V2 命令面（docs/10-v2-design.md §9；V1 命令已整体删除——拍板 D4）：
+//   exec | register | unregister | sync-config | ps
+// 加内部入口：--monitor（main.cpp 截获）、--migrate-templates（M5 迁移工具）。
 
 #pragma once
 
@@ -11,14 +12,19 @@
 
 namespace sbie::cli {
 
-int CmdVersion(const CommandContext& ctx);
-int CmdStatus(const CommandContext& ctx);
-int CmdBoxList(const CommandContext& ctx);
-int CmdProcList(const CommandContext& ctx);
+// V2 用户命令（V2Commands.cpp）
+int CmdExec(const CommandContext& ctx);
+int CmdRegister(const CommandContext& ctx);
+int CmdUnregister(const CommandContext& ctx);
+int CmdSyncConfig(const CommandContext& ctx);
+int CmdPs(const CommandContext& ctx);
+int CmdKillBox(const CommandContext& ctx);
+int CmdKill(const CommandContext& ctx);
+int CmdLog(const CommandContext& ctx);
+int CmdInfo(const CommandContext& ctx);
 
-// 未实现桩（报错退出；exit 码按命令语义选 1/4）
-int CmdNotImplemented(const CommandContext& ctx);
-int CmdServerUnavailable(const CommandContext& ctx);
+// 内部工具：--migrate-templates <Templates.ini> <outDir>（TemplateMigrate.cpp）
+int CmdMigrateTemplates(const std::wstring& src, const std::wstring& outDir);
 
 void RegisterCommands();
 

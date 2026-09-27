@@ -30,6 +30,26 @@ REM      start/stop; ImBox.exe is spawned by SbieSvc MountManager
 REM      for disk-image/ram boxes; SandboxieRpcSs.exe +
 REM      SandboxieDcomLaunch.exe are auto-started sandboxed COM
 REM      stubs (core\dll\ipc_start.c) unless NoSandboxieRpcSs=y.
+REM      SandboxieBITS/WUAU/Crypto.exe are HARDCODED SCM redirects
+REM      (core\dll\scm.c Scm_IsBoxedService + scm_create.c
+REM      Scm_StartBoxedService2): a boxed StartService of
+REM      bits/wuauserv/cryptsvc launches the matching stub; NOT
+REM      template-gated, and missing stubs mean the in-box feature
+REM      silently fails. ~0.4MB combined - all five ship.
+REM    - Templates.ini: the ORIGINAL full file ships (byte-identical from the
+REM      layout). A minimal OSS stub was prototyped and REJECTED on evidence:
+REM      with a stubbed home Templates.ini, sandboxed process startup breaks
+REM      deterministically on the frozen 5.73.5 runtime (A/B/A verified twice:
+REM      full=ok, stub=child exit 127 + SYSTEM-context log flood; consumer
+REM      lives in frozen core\dll/core\svc code). V2 never consumes this file
+REM      for its own boxes (user-space expansion, zero Template= residue) -
+REM      it ships purely to keep the frozen runtime healthy. Revisit a slim
+REM      file post-freeze. docs/05-build.md section 8.2 records the evidence.
+REM    - templates\ = the V2 template tree (400 files, migrated from
+REM      install\Templates.ini by "sbie-cli --migrate-templates").
+REM      It is the initial SBIE_TEMPLATE_DIR content; sbie-cli also
+REM      falls back to <exe dir>\templates automatically, so the
+REM      dist is zero-config self-contained.
 REM    - 32\SbieDll.dll + 32\SbieSvc.exe = WOW64 pair for
 REM      sandboxing 32-bit apps.
 REM    - VC runtime trio included so the dist runs on machines
@@ -44,9 +64,8 @@ REM      SandMan.exe, Qt6*.dll, QSbieAPI.dll, MiscHelpers.dll,
 REM      UGlobalHotkey.dll, qtsingleapp.dll, platforms\, styles\,
 REM      tls\, 7z.dll, UpdUtil.exe, SbieShellExt.dll, MiniDump,
 REM      SbieCtrl.exe, SboxHostDll.dll, SbieIni.exe (sbie-cli
-REM      has its own cfg group), Start.exe (sbie-cli proc start
-REM      launches through SbieDll itself), SandboxieWUAU/BITS/
-REM      Crypto (opt-in sandboxed-service stubs), pdb files.
+REM      has its own cfg group), Start.exe (exec launches through
+REM      SbieSvc RunSandboxed, never Start.exe), pdb files.
 REM      sbie-gui\ (the OSS GUI ships from the layout, not the
 REM      minimal dist - see docs/09-gui.md).
 REM    - No "msgs" text directory exists in the layout: message
@@ -59,7 +78,14 @@ cd /d "%~dp0"
 set "OSSDIR=%CD%"
 set "REPO=%CD%\.."
 set "LAYOUT=%REPO%\Installer\SbieOSS_x64"
-set "DISTROOT=%OSSDIR%\dist"
+REM Dist output root. Override SBIEOSS_DISTROOT to emit elsewhere (CI,
+REM or when the default dist\ is transiently locked by an external
+REM process - e.g. a shell sitting inside it).
+if defined SBIEOSS_DISTROOT (
+    set "DISTROOT=%SBIEOSS_DISTROOT%"
+) else (
+    set "DISTROOT=%OSSDIR%\dist"
+)
 set "DIST_NAME=Sandboxie-OSS-x64"
 set "STAGE=%DISTROOT%\%DIST_NAME%"
 set "ZIP=%DISTROOT%\%DIST_NAME%.zip"
@@ -76,8 +102,12 @@ if not exist "%LAYOUT%\sbie-cli.exe" (
     goto :fail
 )
 
-REM root files copied flat into the dist root
-set "ROOT_FILES=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
+REM root files copied flat into the dist root.
+REM Templates.ini = the ORIGINAL full file (see header note: the minimal stub
+REM was rejected on evidence - it breaks spawns on the frozen runtime).
+set "ROOT_FILES=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
+REM V2 template tree (initial SBIE_TEMPLATE_DIR content + exe-dir fallback)
+set "TPL_SRC=%OSSDIR%\templates"
 REM driver: sys+inf required, copied as-is from layout\driver\
 REM (any further files in layout\driver\ - e.g. a build-emitted
 REM cat - are copied along as-is; none are hard-required)
@@ -89,6 +119,7 @@ set "MISSING="
 for %%f in (%ROOT_FILES%) do if not exist "%LAYOUT%\%%f" call :add_missing "%%f"
 for %%f in (%DRV_FILES%)  do if not exist "%LAYOUT%\driver\%%f" call :add_missing "driver\%%f"
 for %%f in (%WOW_FILES%)  do if not exist "%LAYOUT%\32\%%f" call :add_missing "32\%%f"
+if not exist "%TPL_SRC%\BoxTypes\Standard.ini" call :add_missing "templates\BoxTypes\Standard.ini"
 if not exist "%REPO%\LICENSE.Classic"        call :add_missing "..\LICENSE.Classic"
 if not exist "%OSSDIR%\thirdparty\README.md" call :add_missing "thirdparty\README.md"
 if not exist "%OSSDIR%\docs\README.md"       call :add_missing "docs\README.md"
@@ -111,13 +142,18 @@ copy /y "%REPO%\LICENSE.Classic"        "%STAGE%\LICENSE-OSS"     >nul || goto :
 copy /y "%OSSDIR%\thirdparty\README.md" "%STAGE%\THIRD-PARTY.md"  >nul || goto :fail
 copy /y "%OSSDIR%\docs\README.md"       "%STAGE%\docs\README.md"  >nul || goto :fail
 
+REM V2 template tree -> dist\templates\ (robocopy /E: recursive incl. empty;
+REM exit codes 0-7 are success for robocopy)
+robocopy "%TPL_SRC%" "%STAGE%\templates" /E /NJH /NJS /NDL /NFL >nul
+if errorlevel 8 ( echo [ERROR] robocopy templates failed & goto :fail )
+
 REM --- 2. VERSION.txt: sbie-cli version + driver version + date ---
 echo [2/4] Generating VERSION.txt
 REM Running the staged copy doubles as a smoke test: it resolves
 REM SbieDll.dll from its own directory (candidate #2 of the
 REM drv::LoadSbieDll search chain after --sbie-dll-path).
 set "CLI_VER=unknown"
-"%STAGE%\sbie-cli.exe" --no-server version > "%DISTROOT%\version.tmp" 2>nul
+"%STAGE%\sbie-cli.exe" --version > "%DISTROOT%\version.tmp" 2>nul
 if errorlevel 1 (
     echo [WARN] staged sbie-cli.exe version check failed - CLI_VER stays unknown
 ) else (
@@ -166,11 +202,33 @@ if not exist "%VDIR%\%DIST_NAME%\sbie-cli.exe" (
     echo [ERROR] zip layout wrong: sbie-cli.exe not at %DIST_NAME%\ root after extract
     goto :fail
 )
-"%VDIR%\%DIST_NAME%\sbie-cli.exe" --no-server version
+"%VDIR%\%DIST_NAME%\sbie-cli.exe" --version
 if errorlevel 1 (
     echo [ERROR] extracted sbie-cli.exe failed to run
     goto :fail
 )
+
+REM V2 dist invariants: full Templates.ini present (UTF-16 file - findstr
+REM cannot match it; verify by size: full = ~152KB, any stub would be <2KB)
+REM + template tree + five service stubs
+set "VD=%VDIR%\%DIST_NAME%"
+set "TPLSZ=0"
+for %%A in ("%VD%\Templates.ini") do set "TPLSZ=%%~zA"
+if %TPLSZ% LSS 100000 (
+    echo [ERROR] Templates.ini too small - %TPLSZ% bytes, expected the full 152KB original
+    goto :fail
+)
+if not exist "%VD%\templates\BoxTypes\Standard.ini" (
+    echo [ERROR] V2 template tree missing: templates\BoxTypes\Standard.ini not found
+    goto :fail
+)
+for %%f in (SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe) do (
+    if not exist "%VD%\%%f" (
+        echo [ERROR] sandboxed service stub missing: %%f
+        goto :fail
+    )
+)
+echo V2 invariants OK: full Templates.ini + templates tree + 5 service stubs present.
 
 REM driver cat / signature status: REPORT ONLY, never a gate.
 REM A stock WDK build emits no cat and a test-signed sys - that is

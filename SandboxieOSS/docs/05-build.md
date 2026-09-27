@@ -321,14 +321,36 @@ sbie-cli.exe）。脚本对**全部输入文件逐一核存在**，缺任一直�
 `QSbieAPI.dll`、`MiscHelpers.dll`、`UGlobalHotkey.dll`、`qtsingleapp.dll`、
 `platforms\`、`styles\`、`tls\`、`7z.dll`、`translations.7z`、
 `troubleshooting.7z`、`SbieShellExt.dll`、`SbieShellPkg.msix`、`UpdUtil.exe`、
-`MiniDump.exe`、`SbieCtrl.exe`（旧 UI）、`SandboxieBITS/WUAU/Crypto.exe`
-（模板选入的沙箱服务桩，非默认必需——需要对应模板的 box 从完整安装补充）、
-`SboxHostDll.dll`/`SbieIni.exe`/`Start.exe`（sbie-cli 经自有 SvcClient/SbieDll
-路径实现同类功能，dumpbin 证实 sbie-cli 不依赖它们）、全部 `.pdb`、
-`sbie-gui\`（GUI 随布局 `Installer\SbieOSS_x64\sbie-gui\` 分发，最小 dist
-不含——09-gui.md）、`Sandboxie.ini`/`SbieSettings.ini`（Sandboxie.ini 首次
-运行按 core 规则生成或落 `C:\Windows\Sandboxie.ini`，见
-`SbieCore\Model\Templates.cpp:239-246`）。
+`MiniDump.exe`、`SbieCtrl.exe`（旧 UI）、
+`SboxHostDll.dll`/`SbieIni.exe`/`Start.exe`（V2 exec 经 SvcClient
+RunSandboxed/SbieDll 路径实现同类功能，dumpbin 证实 sbie-cli 不依赖它们）、
+全部 `.pdb`、`sbie-gui\`（GUI 随布局 `Installer\SbieOSS_x64\sbie-gui\` 分发，
+最小 dist 不含——09-gui.md）、`Sandboxie.ini`/`SbieSettings.ini`（按 core
+规则首次运行生成）。
+
+**V2 部署层修订（2026-09-28，实测定论）**：
+
+1. **五个沙箱内模拟服务全带**（BITS/WUAU/Crypto 从"不带"改为随 dist）。
+   实读拉起链：RpcSs/DcomLaunch = `core\dll\ipc_start.c:61-115` 任何非
+   RpcSs 盒内进程触碰 `epmapper` 端口按需拉起 RpcSs，RpcSs 请求
+   `actkernel` 拉起 DcomLaunch（仅 `NoSandboxieRpcSs=y` 关闭）——默认
+   沙箱必需；BITS/WUAU/Crypto = `core\dll\scm.c:1064-1109`
+   （Scm_IsBoxedService **硬编码** bits/wuauserv/cryptsvc/MSIServer/
+   TrustedInstaller）+ `scm_create.c:972-1009`（盒内 StartService 上述
+   服务名 → SbieDll_RunFromHome 启动对应桩 exe）——**非模板门控**，
+   缺失即盒内 Windows Update/BITS 下载/证书服务静默失败。三桩合计约
+   0.4MB，全带（build_all 布局面与 make_dist ROOT_FILES 已同步）。
+2. **Templates.ini 随 dist 保留完整原文件**（最小 stub 方案实测否决）：
+   安装目录 Templates.ini 换最小 stub 后，冻结版 5.73.5 运行时的沙箱内
+   进程启动确定性失败（A/B/A 两轮：全文件=正常 / stub=子进程退出码
+   127 即刻夭折+驱动日志 SYSTEM 上下文条目洪泛 / 全文件=正常；消费方
+   位于冻结的 core\dll/core\svc 代码内，冻结期不可修）。V2 自身不消费
+   该文件（用户态展开、缓存零 Template= 残留）——随包仅为保冻结运行时
+   健康。解冻后定位消费方再瘦身。make_dist --verify 以体积阈值（≥100KB）
+   校验完整文件在场。
+3. **V2 模板树随 dist 分发**：`templates\`（400 文件，`--migrate-templates`
+   产物）= SBIE_TEMPLATE_DIR 初始内容；sbie-cli 另有 `<exe 目录>	emplates`
+   内置兜底根（环境变量根优先），dist 零配置自洽。
 
 ### 8.3 使用法
 

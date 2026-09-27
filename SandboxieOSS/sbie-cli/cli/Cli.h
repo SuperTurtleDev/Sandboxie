@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Sandboxie-OSS contributors
 //
-// argv 解析（位置参数 + `-`/`--` 选项）、命令路由框架（04-modules.md §2.6/§3）。
-// 通用选项：--json / --quiet(-q) / --password <pw> / --no-server / --no-refresh /
-// --help(-h)；全局选项：--sbie-dll-path <dir>（传给 drv::LoadSbieDll）。
-// 密码优先级：选项 > 环境变量 SBIE_PASS（在 Commands 使用点解析）。
+// V2 argv 解析与路由（docs/10-v2-design.md §9）。命令面仅五命令（拍板 D4）。
+// 通用选项：--json / --quiet(-q) / --wait <sec> / --verbose / --sbie-dll-path <dir>
+// / --help(-h)。exec 另有 --detach（命令级）。
 
 #pragma once
+
+#include <windows.h>
 
 #include <map>
 #include <string>
@@ -18,36 +19,29 @@ namespace sbie::cli {
 struct GlobalOptions {
     bool json = false;          // --json
     bool quiet = false;         // --quiet / -q
-    bool noServer = false;      // --no-server
-    bool noRefresh = false;     // --no-refresh（box/cfg set 类）
-    bool help = false;          // --help / -h
-    bool showTransport = false; // --show-transport（诊断：stderr 报告每命令
-                                // 实际走的传输——ipc / direct；server 写路径
-                                // 波次验收用，04 §12）
-    std::wstring password;      // --password <pw>
-    std::wstring sbieDllPath;   // --sbie-dll-path <dir>（全局）
+    bool verbose = false;       // --verbose（展开溯源等诊断到 stderr）
+    bool execWait = false;      // --wait（exec 等待子进程并透传退出码，R1）
+    DWORD waitMs = 10000;       // --settle <sec>（状态机收敛超时，默认 10s）
+    std::wstring sbieDllPath;   // --sbie-dll-path <dir>
+    std::wstring password;      // --password <pw>（R2；空 = 查 SBIE_PASS 环境变量）
 };
 
 struct CommandContext {
     GlobalOptions opts;
-    std::vector<std::wstring> args;   // 子命令树剩余位置参数（含组名/子名）
+    std::vector<std::wstring> args;   // 位置参数（含命令名）
 };
 
 using CommandHandler = int (*)(const CommandContext& ctx);
 
-// wmain 入口（main.cpp 薄转发）。返回进程退出码（04 §6 语义）。
+// wmain 入口（main.cpp 薄转发）。返回进程退出码。
 int Run(const std::vector<std::wstring>& argv);
 
-// 子命令注册表：group → sub → handler（框架；新命令只加注册项）
+// 命令注册表：command → handler（V2 单层面，无二级子命令）
 std::map<std::string, std::map<std::string, CommandHandler>>& Commands();
-// 无子命令的顶层组（status/version）以 L"" 为 sub 键
 int Route(const std::wstring& group, const std::wstring& sub,
           const CommandContext& ctx);
 
 // 用法文本（--help / USAGE 错误，stdout / stderr）
 void PrintUsage(bool toStdout);
-// 组级帮助（08-P2-6）：<group> --help 打印该组子命令清单（注册表枚举）。
-// group 必须已注册（未注册组由调用方退回 PrintUsage）。
-void PrintGroupUsage(const std::wstring& group, bool toStdout);
 
 } // namespace sbie::cli

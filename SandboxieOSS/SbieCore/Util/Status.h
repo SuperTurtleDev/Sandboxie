@@ -24,8 +24,14 @@ enum class SbieStatus : long {
     NOT_FOUND = 5,          // 目标（box/pid/setting/…）不存在
     ACCESS_DENIED = 6,      // 权限不足/密码错/在沙箱内运行
     INVALID = 7,            // 名字/参数值非法
-    RETRY_SUGGESTED = 8,    // server 中途崩溃且命令非幂等
+    RETRY_SUGGESTED = 8,    // （V1 遗留语义位；V2 无 server，不再产生）
     BOX_BUSY = 9,           // 沙箱内有活动进程
+
+    // ---- V2 扩展（docs/10-v2-design.md §9.2；仍为进程退出码）----
+    STATE_TIMEOUT = 10,     // 等注册可见/消失超时（--wait）
+    TEMPLATE_ERROR = 11,    // 模板缺失/环/歧义/变量缺失/类目不符
+    CACHE_INVALID = 12,     // 缓存自检失败 / 注册 reload 失败
+    SPAWN_FAILED = 13,      // RunSandboxed/进程启动失败
 
     // ---- 内部扩展码（不直接作为进程退出码）----
     ERR_JSON = 100,          // JSON 解析/序列化失败（04 §7.3）

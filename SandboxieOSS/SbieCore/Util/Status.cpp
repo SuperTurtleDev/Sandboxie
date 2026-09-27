@@ -55,14 +55,14 @@ SbieStatus FromNtStatus(LONG ntstatus)
 int ToExitCode(SbieStatus s)
 {
     long v = static_cast<long>(s);
-    if (v >= 0 && v <= 9)
+    if (v >= 0 && v <= 13)
         return (int)v;
     // 扩展码折叠
     switch (s) {
     case SbieStatus::ERR_SBIEDLL:
         return (int)SbieStatus::DRIVER_UNAVAILABLE; // 3：SbieDll 不可得 ≈ 驱动不可用
     case SbieStatus::ERR_SVC_TRANSPORT:
-        return (int)SbieStatus::SERVER_UNAVAILABLE; // 4：SbieSvc 传输不可用
+        return (int)SbieStatus::GENERIC; // V2：SbieSvc 传输不可用（无 server 语义）
     case SbieStatus::ERR_JSON:
     case SbieStatus::ERR_NOT_IMPLEMENTED:
     default:
@@ -83,6 +83,10 @@ const wchar_t* StatusName(SbieStatus s)
     case SbieStatus::INVALID:            return L"INVALID";
     case SbieStatus::RETRY_SUGGESTED:    return L"RETRY_SUGGESTED";
     case SbieStatus::BOX_BUSY:           return L"BOX_BUSY";
+    case SbieStatus::STATE_TIMEOUT:      return L"STATE_TIMEOUT";
+    case SbieStatus::TEMPLATE_ERROR:     return L"TEMPLATE_ERROR";
+    case SbieStatus::CACHE_INVALID:      return L"CACHE_INVALID";
+    case SbieStatus::SPAWN_FAILED:       return L"SPAWN_FAILED";
     case SbieStatus::ERR_JSON:           return L"ERR_JSON";
     case SbieStatus::ERR_SBIEDLL:        return L"ERR_SBIEDLL";
     case SbieStatus::ERR_SVC_TRANSPORT:  return L"ERR_SVC_TRANSPORT";

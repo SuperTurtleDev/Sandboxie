@@ -72,6 +72,8 @@ public:
     SbieStatus GetProcInfo(ULONG pid, unsigned infoClasses /*1|2|4*/, ProcInfo* out);
     SbieStatus RunSandboxed(const std::wstring& box, const std::wstring& cmd,
                             const std::wstring& dir, ULONG creationFlags, RunResult* out);
+    // RunSandboxed 失败时服务端回的 win32 错误码（成功清零；诊断用）
+    static ULONG LastRunSandboxedWin32();
 
     // ---- ImBox / MountManager（波 D2，docs/04 §18；服务端 core/svc/MountManager.cpp，
     //      wire 头 vendor/MountManagerWire.h）----

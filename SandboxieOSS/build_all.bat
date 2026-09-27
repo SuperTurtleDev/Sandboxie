@@ -148,8 +148,18 @@ if exist "%OUT%" ( echo [ERROR] cannot clean stale "%OUT%" & goto :fail )
 mkdir "%OUT%\32" "%OUT%\driver" || goto :fail
 
 REM x64 core runtime
-for %%f in (SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe) do copy /y "%BIN64%\%%f" "%OUT%\%%f" >nul || goto :fail
+REM All five in-sandbox service stubs ship: RpcSs + DcomLaunch are started
+REM on demand via the epmapper/actkernel ports (core dll ipc_start.c) and
+REM are required by default boxes; BITS + WUAU + Crypto are HARDCODED SCM
+REM redirects (dll scm.c Scm_IsBoxedService + scm_create.c StartBoxedService2:
+REM a boxed StartService of bits/wuauserv/cryptsvc runs the matching stub
+REM exe; NOT template-gated - if absent the in-box feature silently fails).
+REM Combined ~0.4MB, ship all (docs/05 section 8.2 revision).
+for %%f in (SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe) do copy /y "%BIN64%\%%f" "%OUT%\%%f" >nul || goto :fail
 copy /y "%TOOLS%\ImBox.exe" "%OUT%\ImBox.exe" >nul || goto :fail
+REM Full V1 Templates.ini goes into the LAYOUT only; make_dist.bat replaces
+REM it with the minimal OSS stub in the distributed tree (V2 expands
+REM templates entirely in user space; the kernel never consumes them).
 copy /y "%REPO%\Sandboxie\install\Templates.ini" "%OUT%\Templates.ini" >nul || goto :fail
 
 REM VC runtime trio - layout runs on machines without the VC++ redist
@@ -190,7 +200,7 @@ REM [8] Verify the layout face + print it (files + sizes)
 REM ------------------------------------------------------------
 echo.
 echo [8/8] Verifying layout
-set "FACE=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
+set "FACE=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
 set "MISSING="
 for %%f in (%FACE%) do if not exist "%OUT%\%%f" call :add_missing "%%f"
 for %%f in (SbieDll.dll SbieSvc.exe) do if not exist "%OUT%\32\%%f" call :add_missing "32\%%f"
