@@ -84,22 +84,6 @@
                  </property>
                 </widget>
                </item>
-               <item row="11" column="1" colspan="13">
-                <widget class="QLabel" name="lblSupportCert">
-                 <property name="text">
-                  <string>&lt;b&gt;More Box Types&lt;/b&gt; are exclusively available to &lt;u&gt;project supporters&lt;/u&gt;, the Privacy Enhanced boxes &lt;b&gt;&lt;font color='red'&gt;protect user data from illicit access&lt;/font&gt;&lt;/b&gt; by the sandboxed programs.&lt;br /&gt;If you are not yet a supporter, then please consider &lt;a href=&quot;https://sandboxie-plus.com/go.php?to=sbie-get-cert&quot;&gt;supporting the project&lt;/a&gt;, to receive a &lt;a href=&quot;https://sandboxie-plus.com/go.php?to=sbie-cert&quot;&gt;supporter certificate&lt;/a&gt;.&lt;br /&gt;You can test the other box types by creating new sandboxes of those types, however processes in these will be auto terminated after 5 minutes.</string>
-                 </property>
-                 <property name="textFormat">
-                  <enum>Qt::TextFormat::RichText</enum>
-                 </property>
-                 <property name="wordWrap">
-                  <bool>true</bool>
-                 </property>
-                 <property name="openExternalLinks">
-                  <bool>true</bool>
-                 </property>
-                </widget>
-               </item>
                <item row="0" column="1">
                 <widget class="QLabel" name="label_30">
                  <property name="sizePolicy">
