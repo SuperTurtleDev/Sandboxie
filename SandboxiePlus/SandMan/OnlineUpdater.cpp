@@ -47,17 +47,6 @@ void COnlineUpdater::OnRequestFinished()
 	pReply->deleteLater();
 }
 
-quint64 COnlineUpdater::GetRandID()
-{
-	quint64 RandID = 0;
-	theAPI->GetSecureParam("RandID", &RandID, sizeof(RandID));
-	if (!RandID) {
-		RandID = QRandomGenerator64::global()->generate();
-		theAPI->SetSecureParam("RandID", &RandID, sizeof(RandID));
-	}
-	return RandID;
-}
-
 SB_PROGRESS COnlineUpdater::GetUpdates(QObject* receiver, const char* member, const QVariantMap& Params)
 {
 	QUrlQuery Query;
@@ -73,11 +62,6 @@ SB_PROGRESS COnlineUpdater::GetUpdates(QObject* receiver, const char* member, co
 #ifdef _DEBUG
 	Query.addQueryItem("debug", "1");
 #endif
-
-	quint64 RandID = COnlineUpdater::GetRandID();
-	quint32 Hash = theAPI->GetUserSettings()->GetName().mid(13).toInt(NULL, 16);
-	QString HashKey = QString::number(Hash, 16).rightJustified(8, '0').toUpper() + "-" + QString::number(RandID, 16).rightJustified(16, '0').toUpper();
-	Query.addQueryItem("hash_key", HashKey);
 
 	if (Params.contains("channel"))
 		Query.addQueryItem("channel", Params["channel"].toString());
