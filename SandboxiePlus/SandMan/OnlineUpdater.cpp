@@ -47,6 +47,17 @@ void COnlineUpdater::OnRequestFinished()
 	pReply->deleteLater();
 }
 
+quint64 COnlineUpdater::GetRandID()
+{
+	quint64 RandID = 0;
+	theAPI->GetSecureParam("RandID", &RandID, sizeof(RandID));
+	if (!RandID) {
+		RandID = QRandomGenerator64::global()->generate();
+		theAPI->SetSecureParam("RandID", &RandID, sizeof(RandID));
+	}
+	return RandID;
+}
+
 SB_PROGRESS COnlineUpdater::GetUpdates(QObject* receiver, const char* member, const QVariantMap& Params)
 {
 	QUrlQuery Query;
