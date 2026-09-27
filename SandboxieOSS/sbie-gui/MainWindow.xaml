@@ -37,6 +37,7 @@
                         x:Name="Nav"
                         IsBackButtonVisible="Auto"
                         IsTitleBarAutoPaddingEnabled="False"
+                        IsSettingsVisible="True"
                         SelectionChanged="OnNavSelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="NavProcesses" Content="进程管理" Tag="processes">
@@ -52,11 +53,6 @@
                 <NavigationViewItem x:Name="NavBoxSettings" Content="沙盒设置" Tag="boxsettings">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem x:Name="NavGlobalSettings" Content="全局设置" Tag="globalsettings">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xF8B0;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

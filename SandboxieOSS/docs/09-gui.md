@@ -83,8 +83,12 @@ selftest 含带空格路径回归用例。
 
 ## 4. 布局：taskmgr 式四页导航（追加规格，2026-09-27）
 
-左侧 `NavigationView`（Left 模式，可折叠）：进程管理 `\uE9D9`、沙盒列表 `\uE8E5`（默认首页）、
-沙盒设置 `\uE713`、全局设置 `\uF8B0`。全局"当前沙盒"存于 AppViewModel（跨页保持）；
+左侧 `NavigationView`（Left 模式，可折叠）：菜单 **三项**——进程管理 `\uE9D9`、
+沙盒列表 `\uE8E5`（默认首页）、沙盒设置 `\uE713`；**左下角自带设置齿轮**
+（`IsSettingsVisible=True`）承载"全局设置"页（菜单中无该项；WinUI3 无
+UWP 的 `SettingsRequested` 事件，齿轮点击经 `SelectionChanged.IsSettingsSelected`
+路由到 GlobalSettingsPage，`OnFrameNavigated` 将该页映射回 `Nav.SettingsItem`
+保持齿轮高亮）。全局"当前沙盒"存于 AppViewModel（跨页保持）；
 沙盒删除/重命名后 `RefreshBoxesAsync` 按名回退联动（列表选中、进程页 ComboBox、
 设置页标题同时更新）。四页均 `NavigationCacheMode=Required`（Frame 缓存实例）。
 
@@ -93,7 +97,7 @@ selftest 含带空格路径回归用例。
 | 进程管理 | 顶部"当前沙盒"ComboBox 快速切换；进程表 PID（等宽 Cascadia）/镜像/会话/启动时间 | 启动程序（路径+浏览+参数）、结束进程（选中行）、全部结束（含 skipped 提示）、刷新 |
 | 沙盒列表（首页） | 表格 名称/启用✓✕/进程数/文件根路径；行选中=设全局当前沙盒；双击行→进程页 | 新建（名称+六类型）、刷新、启用、禁用、重命名、删除（确认+“同时删除内容”复选）；行右键菜单同 |
 | 沙盒设置 | 标题=当前沙盒名；键值表（多值合并 `, ` 展示，等宽值列） | 新增键（含 --append 追加）、编辑选中（多值键可选替换第 i 个或追加）、删除键（cfg unset）、刷新 |
-| 全局设置 | 顶部系统状态卡四行小字（version/status/force/maint，10 s 轮询）；GlobalSettings 键值表 | 新增键/编辑选中/删除键/刷新 |
+| 全局设置（经左下角设置齿轮进入） | 顶部系统状态卡四行小字（version/status/force/maint，10 s 轮询）；GlobalSettings 键值表 | 新增键/编辑选中/删除键/刷新 |
 
 taskmgr 视觉规范执行：每页=页首大标题（Subtitle 样式）+右上命令按钮组+数据表占满；
 数据表细行高（ListViewItem MinHeight=32，无卡片包裹）、表头浅灰
@@ -170,6 +174,20 @@ AI 视觉核验（light-1-home / dark-7-globalsettings）确认：窗口标题�
 清回 9 键基线。GUI 侧 `/c/Users/Administrator/AppData/Local/Temp/1/sbie-gui-*.ps1`
 为验收脚本（临时产物，不在仓库）。
 
+### 6.5 导航整改复验（2026-09-27 第二次小改：齿轮承载全局设置）
+
+菜单项移除"全局设置"、`IsSettingsVisible=True` 齿轮路由后，UIA 快捷自测 **11/11 PASS**：
+菜单=进程管理/沙盒列表/沙盒设置+设置齿轮（无"全局设置"菜单项）→点齿轮进入全局设置页
+（标题、状态卡 version/status/force/maint、键值表 Template/MarkOfTheWebBox 全部渲染）
+→齿轮处于选中高亮态→切回沙盒列表页正常。selftest **31/31 保持全过**（SelfTest 仅覆盖
+服务层，不含导航结构，无需改用例）；`build_gui.bat` 0 error 0 warning。
+截图：`%TEMP%\sbie-gui-gear-globalsettings.png`。
+
+环境备注：早前一次 **SendKeys 键盘驱动**的组合框验证脚本产生串键，经对话框默认按钮
+在后台 GUI 上误触发了"启动程序（New_Box）"与"删除（预置基线 TestVE）"。处置：
+New_Box 进程已 kill-all；TestVE 已按原样重建（standard + 暂停 cmd，3 进程形态一致）。
+教训（并入坑 11）：GUI 自动化只用 UIA pattern（Invoke/Select/Value），不用 SendKeys。
+
 ## 7. 坑记录
 
 1. **XAML 注释不能含 `--`**：装饰性 `<!---->` 分隔线让 XamlCompiler 报 WMC9999
@@ -196,6 +214,10 @@ AI 视觉核验（light-1-home / dark-7-globalsettings）确认：窗口标题�
     需 BOM + 显式 if。
 12. **值日坑**：`Icon` 值、`Window.SystemBackdrop`（MicaBackdrop 需 WinAppSDK≥1.3）、
     `ListViewItem` 默认样式键名 `DefaultListViewItemStyle`（BasedOn 细行高样式）。
+13. **WinUI3 NavigationView 无 `SettingsRequested` 事件**（UWP 才有，XAML 直接报
+    WMC0011 Unknown member）：齿轮交互用 `SelectionChanged` 的 `args.IsSettingsSelected`
+    判定；选中态同步用 `Nav.SettingsItem`（齿轮不是 MenuItems 成员）。另：`Window` 有
+    静态 `Current`，页面类同名静态属性需 `new` 修饰避免 CS0108。
 
 ## 8. 下一波建议（接面已预留）
 

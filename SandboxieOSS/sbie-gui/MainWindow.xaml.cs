@@ -31,7 +31,7 @@ namespace sbie_gui;
 
 public sealed partial class MainWindow : Window
 {
-    public static MainWindow? Current { get; private set; }
+    public static new MainWindow? Current { get; private set; }
 
     public AppViewModel Vm { get; }
 
@@ -76,25 +76,35 @@ public sealed partial class MainWindow : Window
 
     private void OnNavSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        // 左下角设置齿轮承载"全局设置"页（菜单中无该项，选中态即 SettingsItem；
+        // WinUI3 无 SettingsRequested 事件——齿轮点击走 SelectionChanged.IsSettingsSelected）
+        if (args.IsSettingsSelected)
+        {
+            if (ContentFrame.Content?.GetType() != typeof(GlobalSettingsPage))
+                ContentFrame.Navigate(typeof(GlobalSettingsPage));
+            return;
+        }
         if (args.SelectedItem is NavigationViewItem { Tag: string tag })
             NavigateTo(tag);
     }
 
     private void OnFrameNavigated(object sender, NavigationEventArgs e)
     {
-        // 代码导航（双击跳转等）后同步 NavigationView 选中态
-        string? tag = e.SourcePageType switch
+        // 代码导航（双击跳转/设置齿轮）后同步 NavigationView 选中态
+        object? target = e.SourcePageType switch
         {
-            var t when t == typeof(ProcessPage) => "processes",
-            var t when t == typeof(SandboxListPage) => "boxes",
-            var t when t == typeof(BoxSettingsPage) => "boxsettings",
-            var t when t == typeof(GlobalSettingsPage) => "globalsettings",
+            var t when t == typeof(ProcessPage) =>
+                Nav.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => (string)i.Tag == "processes"),
+            var t when t == typeof(SandboxListPage) =>
+                Nav.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => (string)i.Tag == "boxes"),
+            var t when t == typeof(BoxSettingsPage) =>
+                Nav.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => (string)i.Tag == "boxsettings"),
+            var t when t == typeof(GlobalSettingsPage) => Nav.SettingsItem,
             _ => null,
         };
-        if (tag == null)
+        if (target == null)
             return;
-        var target = Nav.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => (string)i.Tag == tag);
-        if (target != null && !ReferenceEquals(target, Nav.SelectedItem))
+        if (!ReferenceEquals(target, Nav.SelectedItem))
             Nav.SelectedItem = target;
     }
 
