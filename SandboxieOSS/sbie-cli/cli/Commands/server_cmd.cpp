@@ -52,8 +52,9 @@ struct LaunchProbe {
 const LaunchProbe g_launchProbe;
 
 // 派生 server（ServerConnect.cpp SpawnServer 同款；DETACHED 不继承控制台 +
-// BREAKAWAY 逃脱 Job，Job 拒绝 breakaway 时回退无标志）
-bool SpawnServer(ULONG idleTimeoutSec)
+// BREAKAWAY 逃脱 Job，Job 拒绝 breakaway 时回退无标志）。noGuardians =
+// --no-guardians 透传（波次 A，07-P0-2）
+bool SpawnServer(ULONG idleTimeoutSec, bool noGuardians)
 {
     WCHAR self[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, self, MAX_PATH))
@@ -64,6 +65,8 @@ bool SpawnServer(ULONG idleTimeoutSec)
     std::wstring cmd = L"\"" + std::wstring(self)
                        + L"\" --start-server --idle-timeout "
                        + std::to_wstring(idleTimeoutSec);
+    if (noGuardians)
+        cmd += L" --no-guardians";
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -155,18 +158,21 @@ json::JsonValue ServerInfoFromStatusOp(bool* have)
 }
 
 const wchar_t* kStartUsage =
-    L"usage: sbie-cli server start [--idle-timeout <sec>]";
+    L"usage: sbie-cli server start [--idle-timeout <sec>] [--no-guardians]";
 
 } // namespace
 
 // ---------------------------------------------------------------------------
-// sbie server start [--idle-timeout N]（04 §4.2；幂等）
+// sbie server start [--idle-timeout N] [--no-guardians]（04 §4.2；幂等）
+// --no-guardians（波次 A，07-P0-2）：派生时透传，空箱守护监视器关（与
+// --idle-timeout 同款交互：Run() 预拉起的默认实例先停再按选项重启）。
 // ---------------------------------------------------------------------------
 
 int CmdServerStart(const CommandContext& ctx)
 {
     bool haveTimeout = false;
     unsigned long timeout = 300;
+    bool noGuardians = false;
     for (size_t i = 2; i < ctx.args.size(); ++i) {
         if ((ctx.args[i] == L"--idle-timeout" || ctx.args[i] == L"--idle")
             && i + 1 < ctx.args.size()) {
@@ -178,6 +184,8 @@ int CmdServerStart(const CommandContext& ctx)
                                  L"invalid --idle-timeout value: "
                                  + ctx.args[i]);
             haveTimeout = true;
+        } else if (ctx.args[i] == L"--no-guardians") {
+            noGuardians = true;
         } else {
             return EmitError(ctx.opts, SbieStatus::USAGE,
                              L"unknown option: " + ctx.args[i] + L"; "
@@ -188,9 +196,10 @@ int CmdServerStart(const CommandContext& ctx)
     ULONG pid = 0;
     if (srvconn::ProbeRunning(&pid)) {
         bool already = g_runningAtLaunch;
-        if (haveTimeout && !already) {
-            // Run() 预拉起的实例用了默认 300s：停掉按自定义超时重启，
-            // 保证 --idle-timeout 可测（见文件头注）
+        if ((haveTimeout || noGuardians) && !already) {
+            // Run() 预拉起的实例用了默认参数（300s / guardians on）：停掉按
+            // 自定义选项重启，保证 --idle-timeout/--no-guardians 可测（见
+            // 文件头注）
             bool sent = false;
             (void)ShutdownServer(&sent);
             (void)WaitServerGone(2500);
@@ -212,7 +221,7 @@ int CmdServerStart(const CommandContext& ctx)
         }
     }
 
-    if (!SpawnServer(timeout)) {
+    if (!SpawnServer(timeout, noGuardians)) {
         return EmitError(ctx.opts, SbieStatus::SERVER_UNAVAILABLE,
                          L"failed to spawn sbie-cli server process");
     }
@@ -329,12 +338,16 @@ int CmdServerStatus(const CommandContext& ctx)
     t.AddColumn(L"CLIENTS", true);
     t.AddColumn(L"IDLE_REMAINING_SEC", true);
     t.AddColumn(L"LOG_PUMP");
+    // 空箱守护监视器（波次 A，07-P0-2）：GUARDIANS=no 的实例以
+    // --no-guardians 派生或 GlobalSettings\GuardiansEnabled=n
+    t.AddColumn(L"GUARDIANS");
     const json::JsonValue* idle = srv.find(L"idle_remaining_sec");
     const std::wstring idleText = (idle && idle->isNull())
         ? std::wstring(L"none")    // null = 空闲不退出（--idle-timeout 0）
         : str(L"idle_remaining_sec");
     t.AddRow({ str(L"running"), str(L"pid"), str(L"uptime_sec"),
-               str(L"clients"), idleText, str(L"log_pump") });
+               str(L"clients"), idleText, str(L"log_pump"),
+               str(L"guardians") });
     EmitRows(ctx.opts, t, srv, L"not running");
     return 0;
 }

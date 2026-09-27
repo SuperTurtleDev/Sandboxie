@@ -580,10 +580,12 @@ void RegisterCommands()
     // ---- 第二波命令集接线（后调用者胜，覆盖上方同键注册项） ----------------
     RegisterServerCommands();        // server start/stop/status
     RegisterCfgTemplateCommands();   // cfg get/path/reload + template 全部 + log
-    RegisterBoxCreateCommands();     // box create
+    RegisterBoxCreateCommands();     // box create(--type 预设)/types
     RegisterBoxManageCommands();     // box info/get/set/list-setting/rename/delete
     RegisterBoxSnapshotCommands();   // box snapshot list/take/remove/select/set-info
-    RegisterBoxRecoverCommands();    // box recover list/copy/add（P0-12）
+    RegisterBoxRecoverCommands();    // box recover list/copy/add（P0-12；
+                                      //   copy 波 B 增 --move/--no-check）
+    RegisterBoxTransferCommands();   // box copy/export/import（07-P1-2/4）
     RegisterProcCommands();          // proc info/start/kill/kill-all/suspend/resume
     RegisterCfgSetCommands();        // cfg set/unset/lock/unlock
     // ---- P1 清尾波次（docs/04 §15；06 缺口表 P1-1/P1-2）----

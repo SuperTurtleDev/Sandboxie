@@ -86,6 +86,11 @@ constexpr const char* kOpLogEvent  = "log.event";   // server → 订阅连接�
 // proc.killAll 参数化 box 可空 = 全局终止（P1-3，沿用 kOpProcKillAll）
 constexpr const char* kOpForceSet    = "force.set";
 constexpr const char* kOpForceStatus = "force.status";
+// 波次 B（docs/04 §17）：07-P1-1/2/4 —— 建箱类型预设参数（box.create
+// 增 type，无新 op）、沙箱复制/导出/导入（三个写语义 op，retry=false）
+constexpr const char* kOpBoxCopy   = "box.copy";
+constexpr const char* kOpBoxExport = "box.export";
+constexpr const char* kOpBoxImport = "box.import";
 
 // 会话级命名（00 §2-§4）
 std::wstring PipeName();     // \\.\pipe\SbieOSS_Cli_S<N>

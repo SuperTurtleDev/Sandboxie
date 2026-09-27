@@ -142,11 +142,16 @@ json::JsonValue RecoverRowsJson(const std::vector<model::RecoverEntry>& es)
     return rows;
 }
 
-// copy 成功消息（两路径一致）
-std::wstring RecoverCopyMessage(const model::RecoverCopyOutcome& o)
+// copy 成功消息（两路径一致；move = 移动语义措辞，07-P1-3）
+std::wstring RecoverCopyMessage(const model::RecoverCopyOutcome& o, bool move)
 {
-    return std::to_wstring(o.copiedFiles) + L" file(s) recovered ("
-           + boxproc::FormatHumanBytes(o.copiedBytes) + L")";
+    return std::to_wstring(o.copiedFiles) + L" file(s) "
+           + (move ? L"moved" : L"recovered") + L" ("
+           + boxproc::FormatHumanBytes(o.copiedBytes) + L")"
+           + (o.skippedFiles > 0
+                  ? L", " + std::to_wstring(o.skippedFiles)
+                        + L" skipped by OnFileRecovery"
+                  : L"");
 }
 
 // copy 失败 → EmitError（目标已存在附 --overwrite 提示；两路径一致）
@@ -274,7 +279,8 @@ int CmdBoxRecover(const CommandContext& ctx)
     if (pos.size() < 2)
         return EmitError(ctx.opts, SbieStatus::USAGE,
                          L"usage: sbie-cli box recover copy <name> "
-                         L"<index|all|path...> [--to <dir>] [--overwrite]");
+                         L"<index|all|path...> [--to <dir>] [--overwrite] "
+                         L"[--move] [--no-check]");
 
     // 行集获取（IPC 优先；降级直连）。copy 语义需要 index/path 解析，两路径
     // 都先取列表（IPC 模式 = recover.list 读 op）
@@ -374,8 +380,13 @@ int CmdBoxRecover(const CommandContext& ctx)
 
     const std::wstring toDir = boxproc::OptionValue(ctx.args, L"--to");
     const bool overwrite = boxproc::HasFlag(ctx.args, L"--overwrite");
+    // 波 B（07-P1-3）：--move = CopyFileW 成功后删沙箱源（移动语义）；
+    // --no-check = 跳过 OnFileRecovery 检查器（缺省执行——键存在即校验）
+    const bool move = boxproc::HasFlag(ctx.args, L"--move");
+    const bool noCheck = boxproc::HasFlag(ctx.args, L"--no-check");
 
-    // 写路径（非幂等，retry=false；真实文件 IO 在 server 侧——docs/04 §14）
+    // 写路径（非幂等，retry=false；真实文件 IO 在 server 侧——docs/04 §14；
+    // move/on_file_recovery = 07-P1-3 参数）
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"name", name);
@@ -386,25 +397,36 @@ int CmdBoxRecover(const CommandContext& ctx)
         if (!toDir.empty())
             ipcroute::PSet(&params, L"to", toDir);
         ipcroute::PSet(&params, L"overwrite", overwrite);
+        ipcroute::PSet(&params, L"move", move);
+        ipcroute::PSet(&params, L"on_file_recovery", !noCheck);
         ipcroute::Result r = ipcroute::Invoke(
             ctx.opts, ipc::kOpRecoverCopy, params, false,
-            [](const GlobalOptions& o, const json::JsonValue& data) {
+            [move](const GlobalOptions& o, const json::JsonValue& data) {
                 if (o.json) {
-                    EmitJsonOk(o, data);   // {copied,bytes,message}
+                    EmitJsonOk(o, data);   // {copied,bytes[,skipped],message}
                     return 0;
                 }
                 const json::JsonValue* m = data.isObject()
                     ? data.find(L"message") : nullptr;
                 EmitMessage(o, m && m->isString()
-                              ? m->asString()
-                              : std::wstring(L"recovered"));
+                                  ? m->asString()
+                                  : std::wstring(L"recovered"));
+                // 检查器拒绝清单（每行一条，stdout 数据面）
+                if (const json::JsonValue* sp = data.isObject()
+                        ? data.find(L"skipped_paths") : nullptr;
+                    sp && sp->isArray()) {
+                    for (const json::JsonValue& p : sp->items())
+                        if (p.isString())
+                            util::PrintLineUtf8(util::WideToUtf8(
+                                L"skipped: " + p.asString()));
+                }
                 return 0;
             });
         if (r.verdict == ipcroute::Verdict::Handled)
             return r.exitCode;
     }
 
-    // 直连：Model 等价执行
+    // 直连：Model 等价执行（CopyEx：move/检查器语义）
     model::BoxInfo bi;
     if (model::BoxRepository(nullptr, svc::SvcClient::Instance())
             .GetInfo(name, &bi)
@@ -412,8 +434,11 @@ int CmdBoxRecover(const CommandContext& ctx)
         return EmitError(ctx.opts, SbieStatus::NOT_FOUND,
                          L"box '" + name + L"' not found");
     model::RecoveryManager rm(bi);
+    model::RecoverCopyOptions opts;
+    opts.move = move;
+    opts.runCheckers = !noCheck;
     model::RecoverCopyOutcome outcome;
-    SbieStatus st = rm.Copy(paths, toDir, overwrite, &outcome);
+    SbieStatus st = rm.CopyEx(paths, toDir, overwrite, opts, &outcome);
     if (st != SbieStatus::OK)
         return EmitRecoverCopyError(ctx.opts, outcome, st);
 
@@ -421,10 +446,21 @@ int CmdBoxRecover(const CommandContext& ctx)
         json::JsonValue d = json::JsonValue::Object();
         d.set(L"copied", json::JsonValue((long long)outcome.copiedFiles));
         d.set(L"bytes", json::JsonValue((long long)outcome.copiedBytes));
-        d.set(L"message", json::JsonValue(RecoverCopyMessage(outcome)));
+        if (outcome.skippedFiles > 0) {
+            d.set(L"skipped",
+                  json::JsonValue((long long)outcome.skippedFiles));
+            json::JsonValue skipped = json::JsonValue::Array();
+            for (const std::wstring& p : outcome.skippedPaths)
+                skipped.pushBack(json::JsonValue(p));
+            d.set(L"skipped_paths", std::move(skipped));
+        }
+        d.set(L"message",
+              json::JsonValue(RecoverCopyMessage(outcome, move)));
         EmitJsonOk(ctx.opts, d);
     } else {
-        EmitMessage(ctx.opts, RecoverCopyMessage(outcome));
+        EmitMessage(ctx.opts, RecoverCopyMessage(outcome, move));
+        for (const std::wstring& p : outcome.skippedPaths)
+            util::PrintLineUtf8(util::WideToUtf8(L"skipped: " + p));
     }
     return 0;
 }

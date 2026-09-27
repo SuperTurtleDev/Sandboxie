@@ -22,6 +22,7 @@ namespace sbie::server {
 
 struct ServerOptions {
     ULONG idleTimeoutSec = 300;   // 0 = 不退出（00 §6）
+    bool noGuardians = false;     // --no-guardians：空箱守护监视器关（07-P0-2）
 };
 
 // 对外契约：int RunServer(const ServerOptions&)

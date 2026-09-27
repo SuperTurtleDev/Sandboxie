@@ -1538,3 +1538,318 @@ DefaultBox/New_Box）；探针 exe 与 OssCwdProbe 目录删除；proc list 0 �
    长期方案 `--env K=V` 显式透传（06 §P1-7 建议注记）。
 4. maint stop --driver 若 KmdUtil 报错会弹 GUI MessageBox（GPL 工具自身
    行为）——RunKmdUtil 15s 超时兜底强杀防无人值守挂死；该路径未实测（见 1）。
+
+## 16. 验收记录（波次 A：触发器与生命周期守护，07-P0-1/07-P0-2，2026-09-27）
+
+构建：`build_oss.bat` Release x64 **0 error / 0 warning（/W4 /WX）**（全量
+rebuild：删 obj/x64\Release 后重建，无告警），产物部署
+`Installer\SbiePlus_x64\sbie-cli.exe`。环境：SbieDrv 5.73.5 RUNNING /
+SbieSvc RUNNING（sc query 复核）；测试窗口前半段 SandMan 常驻（后半段其
+自行退出，见遗留 6）；ini = `C:\WINDOWS\Sandboxie.ini`。
+
+**改动清单**（边界内：`SbieCore\Model\Boxes.{h,cpp}` + `sbie-cli\**` + 本文档
++ docs/07 打勾；未动 Recovery/Snapshots 等 Model 与 ipcc 帧格式）：
+
+- `SbieCore\Model\Boxes.{h,cpp}`：+`TriggerStats` / `RunBoxTriggers(box,
+  setting, out)`（additive——冻结契约面未动）。触发器执行器：逐条读值 →
+  %SANDBOX% 替换 → CreateProcessW（继承环境、CREATE_NO_WINDOW、不继承句柄）
+  → 等待 ≤15s → 下一条。
+- `sbie-cli\server\Guardian.{h,cpp}`（新建）：空箱守护监视器（1s 轮询
+  EnumBoxProcesses 全会话进程数，true→false 转换触发）+ 共享清理执行器
+  `ExecuteBoxPurge(name, CleanContents|RemoveRoot, noTriggers)`（原
+  Dispatcher.cpp 的 DeleteDirRecursiveLocal/CleanDirContents 副本并入，
+  server 模块内统一）。
+- `sbie-cli\server\LogPump.{h,cpp}`：+`AppendSyntheticLog(text)`——guardian
+  动作合成日志行（msgid=0）入环形缓冲 + 推送 log.watch 订阅者。
+- `sbie-cli\server\ServerMain.{h,cpp}`：ServerOptions.+`noGuardians`；
+  INIT 3.5 步 StartGuardians（SvcProxy 就位后、不依赖 session leader）；
+  EXIT 与管道失败路径 StopGuardians；ready 诊断行 + guardians 位。
+- `sbie-cli\server\Dispatcher.cpp`：HBoxClean/HBoxDelete +`no_triggers`
+  参数（经 ExecuteBoxPurge 复用触发器逻辑）；HStatus 的 server 段
+  +`guardians`(bool)/`guardian_fires`(int)。
+- `sbie-cli\main.cpp`：`--start-server` 解析 +`--no-guardians`。
+- `sbie-cli\cli\Commands\box_manage.cpp`：`box clean|delete` +`--no-triggers`
+  （IPC params no_triggers；直连路径同序执行触发器——检查 → 触发器 → 删除）。
+- `sbie-cli\cli\Commands\server_cmd.cpp`：`server start --no-guardians`
+  （透传派生；预拉起实例重启交互与 --idle-timeout 同款）；`server status`
+  表格 +GUARDIANS 列。
+- `sbie-cli\cli\Cli.cpp`：--help 命令树补 --no-triggers/--no-guardians 与
+  guardian 键说明。
+
+**§12.2 参数对拍表的增量**（本波次 client 发送面）：
+
+| op | client 发送 | 备注 |
+|---|---|---|
+| box.clean | name, no_triggers | 写，retry=false；no_triggers 缺省 false（触发器开） |
+| box.delete | name, files, keep_section, **no_triggers**, password? | 07-P0-1；仅 files=true 路径执行触发器 |
+| status（读） | — | data.server 增 guardians/guardian_fires 字段（additive） |
+
+**语义决策记录**（与 SandMan 规格对照，规格来源 docs/07 §3.1 07-P0-1/2）：
+
+1. **OnBoxDelete 执行时机与等待**：SandMan = 删除内容前逐条执行、宿主命令、
+   "异步运行 + UI 进度可取消"。OSS = **命令路径内同步执行**（server op 与
+   client 直连两路），每条 CreateProcessW（继承环境）后等待 ≤15s；超时不杀
+   进程、继续下一条。依据：07 的 CLI 建议原文即"命令路径内同步执行（server
+   op 内执行更自然——避免 client 短生命周期中断）"；15s 上限对齐 07-P1-3
+   记录的 SandMan 检查器 15s 超时习惯；"进度/取消"是 GUI 呈现面，CLI 无此
+   面，同步有界等待为其 CLI 等价物。
+2. **失败策略**：触发器失败（启动失败/非零退出/超时）**继续**剩余命令且
+   **不阻断清理**（尽力而为）。07 未记录 SandMan 的失败中止行为 → 采取继续
+   并经 TriggerStats 计数（当前未入输出，见遗留 2）。
+3. **变量展开**：值**原样**读出（不走驱动 %env% 预展开——驱动在 SYSTEM
+   上下文展开，%TEMP% 会被替换成 C:\WINDOWS\TEMP 语义错误）；仅替换
+   **%SANDBOX%**（大小写不敏感）为 box 名（07 记录的 SandMan 触发器变量）；
+   %TEMP% 等 Windows 变量由子进程（通常 cmd.exe）在继承的宿主用户环境中
+   自行展开（实测：marker 落在用户 Temp）。07 未记录的其他变量（%SANDBOXPATH%
+   等）**不支持**。
+4. **守护选型**：02 文档无驱动侧"box 空"通知 API（仅 1399 进程启动通知，
+   无退出通知）→ **1s 轮询** EnumBoxProcesses（任务书认可 1-2s 粒度）；
+   空箱判定按**全会话**进程数（all_sessions=true——他 session 进程仍在时
+   不误清）；仅 true→false 转换触发（一次生命周期事件，空箱重复触发免疫，
+   新进程重新武装）。**粒度限制**：整个存活期落在两个轮询点之间的子秒级
+   进程可能漏检（轮询固有；kill 类场景进程存活长，可靠——实测 kill 后
+   1-2s 内完成全部守护动作）。
+5. **守护执行序**：OnBoxTerminate → 行为键判定 → 清理（含 OnBoxDelete
+   触发器）→ AutoRemove 节删除。AutoDelete=清内容保根目录保节；AutoRemove
+   与 **Temp_/Local_Temp_ 前缀**（一次性沙箱，07 记录的规则；按任务书规格
+   实现为"等同 AutoRemove"——与 SandMan 的"从 Template 列表移除+清模板节"
+   形态不同，见遗留 5）=连根目录删除+节删除。NeverDelete 保护优先于一切
+   （守护侧跳过并记日志；命令路径报 6）。AutoRemove 的节删除经 SvcProxy
+   空密码——锁配置时失败记日志（内容已清）。
+6. **监视器开关**：`--start-server --no-guardians`（显式关，最高优先）>
+   `GlobalSettings\GuardiansEnabled=n`（配置键）> 缺省**开**。07 未记录
+   SandMan 的等价控制键（SandMan 作为常驻管理器恒执行守护，无键面）→
+   GuardiansEnabled 为本项目自有键。`server start --no-guardians` 对已运行
+   实例幂等不重启（与 --idle-timeout 的预拉起重启交互一致——仅本命令
+   预拉起的实例会按选项重启）。
+7. **可见性**：guardian 动作合成日志行（msgid=0，"guardian: " 前缀）入
+   log 环形缓冲并推送 log.watch 订阅者（实测 `log dump` 可见）；log dump
+   依赖日志泵 = session leader 在场——SandMan 持 leader 时不可用（报
+   SERVER_UNAVAILABLE），此时守护行为仍可经文件系统/配置状态观测。
+   `server status` 增 GUARDIANS 列（--json：server.guardians +
+   server.guardian_fires 计数）。
+
+**实测**（全部真实驱动/SbieSvc；`--show-transport` 核实新参数路径均
+`transport: ipc`，`--no-server` 对照走 direct）：
+
+- **OnBoxDelete（07-P0-1）**：TestOss 设 `OnBoxDelete=cmd /c echo deleted >
+  %TEMP%\oss_trig.txt`（`box get --raw` 回读原样含 %TEMP%——写后回读通）→
+  沙箱内 `cmd /c echo > C:\sbie_mark.txt` 造内容 → `box clean`（ipc）→
+  `cleaned` + **触发器文件生成（"deleted"）+ 内容清空**；`--no-triggers`
+  → 内容清空且**无**触发器文件；`box delete --files`（ipc）→ 触发器文件
+  生成 + 根目录/节全删；直连（--no-server）同语义。**%SANDBOX% 变量**：
+  `cmd /c echo box=%SANDBOX% > %TEMP%\oss_var.txt` → 文件内容 `box=TestOss`。
+- **守护监视器（07-P0-2，全部 kill 驱动、guardian_fires 计数核证）**：
+  TestOss 设 `OnBoxTerminate=cmd /c echo term > %TEMP%\oss_term.txt` +
+  `AutoDelete=y` → 起 `ping -n 30` → `proc kill-all` → **~1s 内** fires+1、
+  OnBoxTerminate marker 生成、内容清空、**节保留**；改 `AutoRemove=y` →
+  kill-all → **~1s 内** fires+1、**根目录+节全删**；`Temp_OssA`（无任何键，
+  仅前缀）→ kill-all → **~1s 内**整箱自动删除。NeverDelete=y + AutoDelete=y
+  → kill 后**不清理**，log dump 可见 `guardian: box 'TestOss' became empty:
+  cleanup skipped (NeverDelete=y)`；`box clean` 同箱报 6（ACCESS_DENIED）。
+- **开关**：`server stop` → `server start --no-guardians` → status
+  GUARDIANS=**no**，kill 驱动空箱后 fires 恒 0（监视器确证关闭）；
+  `cfg set GuardiansEnabled n`（GlobalSettings）→ 重启 → GUARDIANS=no；
+  `cfg unset` → 重启 → GUARDIANS=yes。`server status` 新列输出：
+  `RUNNING PID UPTIME_SEC CLIENTS IDLE_REMAINING_SEC LOG_PUMP GUARDIANS`。
+- **回归**：无键箱 `box clean`/`box delete`（ipc 与 direct）原路径不变；
+  `box clean NoSuchBox` → 5；`server status`/`box list`/`proc list`/
+  `log dump` 正常；触发器键值经 `box set`/`box get --raw` 读写回读一致
+  （键面通用性维持，无需专用命令）。
+
+**清理确认**：TestOss/Temp_OssA/TestOss2 节与目录全删（`C:\Sandbox\
+Administrator` 仅 DefaultBox/New_Box）；ini 仅原四节，0 处 TestOss/
+Temp_Oss/guardian 键引用（含 SandMan 用户节 BoxGrouping 的 TestOss 残留已
+经 `cfg set` 复位为 `:DefaultBox,New_Box`）；触发器 marker 文件
+（oss_trig/oss_var/oss_term）与诊断脚本全删；`server stop` 收尾、无
+sbie-cli 进程残留；**SbieDrv/SbieSvc RUNNING（系统基线还原）**。
+
+**遗留**：
+
+1. **轮询粒度**：子秒级短命进程的空箱事件可能落在两个轮询点之间漏检
+   （kill 类可靠）；长期可改 SBIE 日志事件驱动，但需 session leader 在场
+   （SandMan 共存时不可用），且 02 文档未记录进程退出通知 msgid。
+2. **触发器执行计数未入命令输出**：box clean/delete 的 data.message 维持
+   "cleaned"/"deleted" 契约不变；TriggerStats 已采集，后续可在 --json 加
+   triggers_run/triggers_failed 字段。
+3. **AutoRemove 守护路径无密码**：锁配置（EditPassword）时守护的节删除失败
+   （内容已清、记日志）；命令路径不受影响（--password 可用）。
+4. **SandMan 共存双执行者**：同会话 SandMan 常驻时其自身也执行这四个键
+   （触发命令可能被执行两次、清理竞争）。实测早期 guardian 观察被 SandMan
+   行为掩蔽，以 guardian_fires 计数作判别器完成隔离验证。
+5. **Temp_ 语义形态差异**：SandMan 的 Temp_ 模板清理为"从 Template 列表
+   移除+清模板节"（07 §3.1 ②）；本实现按任务书规格 = 箱名前缀 Temp_/
+   Local_Temp_ 等同 AutoRemove（内容+节删除）。模板节清理形态未实现。
+6. **SandMan 在测试窗口中自行退出**（前半段常驻、约 13:31 后不在——无任何
+   sbie-cli 命令以其为目标；其后本 server 取得 session leader，log pump
+   转为可用并完成了 log dump 验证）。
+
+## 17. 验收记录（波次 B：建箱预设 / 复制 / 导出导入 / 恢复增强，07-P1-1/2/3/4，2026-09-27）
+
+构建：`build_oss.bat` Release x64 **0 error / 0 warning（/W4 /WX）**，产物
+`Installer\SbiePlus_x64\sbie-cli.exe`。环境：SbieDrv 5.73.5 RUNNING /
+SbieSvc RUNNING；ini = `C:\WINDOWS\Sandboxie.ini`；测试全程 SandMan 常驻
+（本波次无守护交互面，无掩蔽问题）。
+
+**接手说明**：本波次由前任 agent 中断后接手完成。前任已写完四任务全部代码面
+（Model/Util/CLI/server op/注册接线齐全，构建一次通过），**未实测、未写文档**；
+且其中 zip 写入器存在两处格式 bug（见"接手修复"）。遗留现场：TestOss（Note
+= "wave B copy probe"，SandMan 向导形态）/TestOss2 两测试箱 + 一个旧二进制
+server 进程，均已于本波次清理/重启。
+
+**改动清单**（边界内：`SbieCore\Model\**`、`SbieCore\Util\Zip.{h,cpp}`（新）、
+`sbie-cli\**`、docs/04/07）：
+
+- `SbieCore\Model\BoxTransfer.{h,cpp}`（新）：07-P1-1/2/4 的 Model 面——
+  `BoxTypePresets()`（六类键组表）/`FindBoxTypePreset`/`ApplyBoxTypeKeys`（预设
+  键组落盘，refresh 收尾）；`ReadBoxSection`（节整读 "Key=Value\n" 行集）/
+  `CopyDirTree`（目录树拷贝，重解析点跳过口径同 BoxUsage/Recovery）；
+  `CopyBox`（节替换写入新名 + 可选内容）；`ExportBox`/`ImportBox`（包 =
+  box.ini + content/ 树，zip 或目录形态）。
+- `SbieCore\Util\Zip.{h,cpp}`（新）：最小 zip 读写器（PKWARE APPNOTE store
+  子集自研，零第三方依赖）——本地头顺序流出 + 集中目录 + EOCD；读侧 EOCD
+  回扫 + 集中目录全量载入（≤8 MiB 防病态包）+ 逐条目流式解出（CRC32 校验）；
+  UTF-8 文件名（通用位 bit 11）、DOS 时间戳 2s 精度、32 位尺寸（无 zip64）。
+- `SbieCore\Model\Recovery.{h,cpp}`：+`RecoverCopyOptions`（move/runCheckers）
+  /`CopyEx`（Copy 的超集，原 Copy 冻结为 legacy 委托）；outcome +
+  skippedFiles/skippedPaths（检查器拒绝清单）；检查器执行器 `RunFileChecker`
+  （值 + %SANDBOX% 展开 + 带引号沙箱路径参数，宿主执行 ≤15s，非零/超时/启动
+  失败 = 拒绝）；move = 拷后删源（删源失败 = 该条目失败，已拷目标保留=重试
+  安全）。
+- `sbie-cli\cli\Commands\box_create.cpp`：`--type <t>`（未知类型 7 +
+  指向 `box types`）+ `CmdBoxTypes`（预设表本地渲染，无 IO/无 server 依赖）。
+- `sbie-cli\cli\Commands\box_transfer.cpp`（新）：`box copy/export/import`
+  三命令（IPC 优先 `box.copy/box.export/box.import`，降级直连 Model）。
+- `sbie-cli\cli\Commands\box_recover.cpp`：`copy` + `--move`/`--no-check`
+  （参数 move / on_file_recovery）；skipped_paths 数据面输出（文本逐行
+  "skipped: <path>"，JSON 数组）。
+- `sbie-cli\server\Dispatcher.cpp`：HBoxCreate +type；HBoxCopy/HBoxExport/
+  HBoxImport 三个写 op（copy/import 经 SvcProxy——节写入触 SbieSvc；export
+  纯文件 IO worker 直执）；HRecoverCopy +move/on_file_recovery。
+- `sbie-cli\ipcc/SbieIpc.h`：+`kOpBoxCopy/kOpBoxExport/kOpBoxImport`。
+- `sbie-cli\cli\Cli.cpp`/`Commands.cpp`/`BoxProcCommands.h`：--help 命令树、
+  注册接线、`--type` 值旗标表。
+
+**§12.2 参数对拍表的增量**（本波次 client 发送面）：
+
+| op | client 发送 | 备注 |
+|---|---|---|
+| box.create | name, templates[], password?, **type?** | 写，retry=false；type 缺省 = 现行为 |
+| box.copy | src, dst, content, password? | 写，retry=false；server 经 SvcProxy |
+| box.export | name, to, archive | 产物幂等覆盖，retry=true（box.size 同类） |
+| box.import | path, name, archive, password? | 写，retry=false；server 经 SvcProxy |
+| recover.copy | name, paths[], to?, overwrite, **move, on_file_recovery** | 写，retry=false；文件 IO server 侧 |
+
+**语义决策记录**（与 SandMan 规格对照，规格来源 docs/07 §3.2）：
+
+1. **六类 = 7 类减 1**：Confidential Encrypted（UseFileImage 链路）许可证
+   禁，不出预设表（07 建议"加密类型显式报许可证禁用"——不出表比报错更早
+   失败，`box types` 即文档）。standard = 0 键（仅 Enabled=y，向导缺省）。
+   键序：hardened-plus 先 UsePrivacyMode 后 UseSecurityMode（向导落键序，
+   无语义差）；refresh 收尾（中间写不热重载，rename/HBoxSet 同款节流）。
+   向导另写 BorderColor（GUI 主题色）——视觉键域（07-N-A-1），CLI 不写。
+2. **zip vs --dir 决策**：**双形态都做**——`--to` 以 `.sbx`/`.zip` 结尾 =
+   zip 归档（store，自研读写器），否则目录形态（`<dest>\box.ini` +
+   `<dest>\content\`）。依据：07 建议原文"首波做 zip（store 模式）+ --dir"；
+   单文件归档是机器迁移的自然形态，目录形态给版本控制/手工检视/挂网络共享
+   的用户。导入侧自动识别（已有目录 = 目录包，否则按归档打开）。**zip 限制
+   （文档化）**：仅 store 条目（读侧遇压缩条目报错——本工具不读第三方压缩
+   包，但产出物可被资源管理器/bsdtar 读取，实测互操作）；无 zip64（单条目
+   <4 GiB、全档 <4 GiB）；mtime 2s 精度（zip 格式固有）；文件属性不保存。
+   **口令加密归档未做**（zip 传统加密弱、AES 无标准对称互操作，07 已列后续；
+   需要时叠加 age/gpg 外部工具即可）。
+3. **复制不触发 OnBoxDelete**：复制语义源箱只读（整节读出 + 新节写入），
+   不删任何内容/节 → 触发器与守护监视器（07-P0-2）均不参与。dst 已存在 →
+   NOT_FOUND(5)（CLI 语义 5 复用："源不存在/目标已存在"合一消息）；src==dst
+   /dst 名非法 → INVALID(7)。**组归属与别名**（07 记录的 SandMan Duplicate
+   附带行为）未跟随——BoxGrouping 是 SandMan 用户节 GUI 组织数据（07-N-A-3），
+   CLI 不复制。
+4. **move 语义 = 拷后删源**（非 rename）：跨卷安全（FileRoot 与恢复目标可
+   在不同卷）；删源失败 = 该条目失败（已拷出的目标保留——重试时 --overwrite
+   即可收敛，比"删源失败回滚目标"更简单且不丢数据）。检查器在**拷贝前**逐
+   文件执行（拒绝 = 跳过该文件、继续其余，整体仍 OK——被拒文件沙箱内原样
+   保留、经 skipped_paths 列出）。
+5. **检查器缺省执行**（与 07 建议的 `--check` 开启式相反）：键存在即校验是
+   更安全的缺省（检查器的意义就是拦恢复；显式 `--no-check` 逃生）。命令拼装
+   = 键值 + 空格 + 带引号沙箱路径（07 记录的 SandMan CheckFilesAsync 语义），
+   %SANDBOX% 展开复用波 A `ExpandSandboxVar`（共享助手）。
+6. **导出幂等覆盖**（retry=true）：产物重复生成无破坏语义（CREATE_ALWAYS /
+   目录形态覆盖同名），与 box.size 同类；copy/import 非幂等（retry=false）。
+7. **空内容箱的导出/复制**：未初始化（无 FileRoot 目录）= 0 文件成功（节
+   键仍完整往返）；导入侧 content/ 缺失同样 0 文件成功。坏包判定 = box.ini
+   缺失/不可读/空 → INVALID(7)；包不存在（文件或目录）→ NOT_FOUND(5)。
+
+**接手修复**（前任 zip 写入器两处格式 bug，自测发现）：
+
+1. **集中目录条头多写一个 u16 零**（extra/comment/盘号/内部属性后多一个
+   → 每条目 48 字节而非 46）：第三方解压器（Windows bsdtar/libarchive）
+   报 "Invalid central directory signature"——前任未实测互操作故未暴露。
+   修复：删去多余 WriteU16(0)，46 字节固定头按 APPNOTE §4.3.12。
+2. **本地头偏移记录错位**：ReserveEntry 在 `&&` 链末尾（名字写完后）以
+   `offset_-30` 回推，多扣了名字长 → 集中目录记录的偏移 = 起点+名长，自产
+   自读报 "zip local header corrupt"。修复：BeginEntry 入口先记 start。
+3. **（补齐）import 归档文件不存在错误码**：原走 ZipReader::Open 失败 =
+   GENERIC(1)，与目录形态包不存在的 NOT_FOUND(5) 不一致；Model 层先查
+   GetFileAttributes → NOT_FOUND，两路径同为 5。
+
+**实测**（全部真实驱动/SbieSvc；`--show-transport` 核实新参数路径均
+`transport: ipc`，`--no-server` 对照走 direct）：
+
+- **--type 六类（07-P1-1）**：六箱分别 hardening/hardened-plus/standard/
+  standard-plus/app/app-plus → 特征键逐一 `box get` 核验：UseSecurityMode/
+  UsePrivacyMode/NoSecurityIsolation/Template=RpcPortBindingsExt（app 型追加）
+  组合全部与预设表一致；standard 仅 Enabled。未知类型 `--type secret` → 7
+  +提示 `box types`；重名 → 5；直连路径同语义；`box types` 文本表 + JSON
+  （含 keys 数组）输出正确。
+- **box copy（07-P1-4）**：键集一致（T_hardened_plus → T_copy1：Enabled/
+  UsePrivacyMode/UseSecurityMode 三键对齐）；--content 带文件（4 文件 35 B，
+  drive\C 嵌套子目录 + user\current 树全数落位，内容 diff 一致）；错误路径
+  （dst 已存在 5 / src 不存在 5 / 同名 7 / 名非法 7）；直连（--no-server）
+  含 --content 同语义；源箱文件全程未动（复制只读语义）。
+- **box export/import（07-P1-2）**：zip 形态（.sbx）导出 4 文件 → **Windows
+  bsdtar 交叉验证通过**（-tf 列目录、-xOf 读 box.ini、完整解压——修复后）；
+  目录形态导出（box.ini + content\ 树）；**错误路径核心场景**：删原箱 →
+  zip import T_back → 键（Enabled/UsePrivacyMode/UseSecurityMode）与 4 文件
+  齐全、内容 diff 一致；目录包 import T_back2 同；import 到已存在名 → 5；
+  空目录坏包 → 7（box.ini missing）；包文件/目录不存在 → 5；export 不存在
+  箱 → 5；空内容箱（0 文件）zip 往返键集对齐（NoSecurityIsolation +
+  Template 均在）；直连路径 export+import 同语义；JSON 输出（files/dirs/
+  bytes/archive/message）正确。
+- **recover --move + 检查器（07-P1-3）**：`--move` 拷后删源（sandbox 目录中
+  源文件消失、目标内容一致，IPC 与 direct 两路径）；OnFileRecovery=
+  `cmd /c exit 3` → `0 file(s) recovered, 1 skipped by OnFileRecovery` +
+  skipped 清单（文本 "skipped: <path>" 逐行 + JSON skipped/skipped_paths），
+  源保留；`--no-check` → 放行恢复；检查器 `cmd /c exit 0` → 正常恢复
+  （--move + --overwrite 组合亦可）；**%SANDBOX% 展开**：检查器命令
+  `cmd /c echo sandbox=%SANDBOX% > <marker>` 收到 `sandbox=T_rec` + 带引号
+  沙箱路径参数。目标已存在保护（+ --overwrite 提示）在 move 路径同样生效。
+- **回归**：无 --type 建箱（仅 Enabled）/box clean/delete（无键箱原路径）/
+  box rename 往返/box enable-disable/cfg get --section/template list/
+  proc list/log dump/server status/version 全部正常；`box clean NoSuchBox`
+  → 5。六类箱与全部 T_* 测试箱最终 `box delete --files` 清理成功。
+
+**清理确认**：全部 T_* 测试箱（六类 + copy/import/move 系列）节与目录全删；
+前任遗留 TestOss/TestOss2（wave B copy probe）节与目录全删；导出物目录
+`C:\Users\Administrator\Documents\sbie\oss_b_test\`（.sbx/.zip/目录包/
+xcheck/rec_out/chk_var.txt）整目录删除；`C:\Sandbox\Administrator` 仅
+DefaultBox/New_Box；ini 仅原四节 + 无任何 T_/OssRecT/OnFileRecovery 测试键
+残留；`server stop` 收尾、无 sbie-cli 进程残留；SbieDrv/SbieSvc RUNNING
+（系统基线还原）。
+
+**遗留**：
+
+1. **--type 高级旗标未做**（07-P1-1 建议的 --location/--v2-delete/--temp/
+   --auto-recover/--block-net/--drop-admin）：键均可经 `box set` 组合达成，
+   旗标属便利层，列为后续波次（07 §5.2 波次 8 剩余项）。
+2. **加密/口令归档未做**（07-P1-2 的后续项）：zip 传统加密弱；建议需要时
+   外部工具叠加或等 AES 互操作决策。
+3. **zip 读侧仅 store**：本工具不读第三方压缩包（报错清晰）；产出物可被
+   资源管理器/bsdtar 读取（互操作实测）。压缩（deflate）未做——沙箱内容
+   多为可压缩文本，后续可在 store 之上叠加自研 deflate（无依赖约束内的
+   格式面扩展）。
+4. **copy 不跟随 BoxGrouping/别名**（07-N-A-3，SandMan 用户节 GUI 组织
+   数据，见决策 3）；import 的冲突处理（改名/跳过/覆盖三选）简化为
+   "已存在即 5 报错"——CLI 用户可用 --name 显式改名达成等价。
+5. **前任遗留现场教训**（流程性）：未实测的格式化代码（zip 二进制布局）
+   不能视为完成；本波次两处 bug 均为"写完未验"的典型（第三方解压器一验
+   即暴露）。已记入本节供后续波次自检。

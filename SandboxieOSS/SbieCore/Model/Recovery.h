@@ -44,6 +44,16 @@ struct RecoverCopyOutcome {
     std::wstring failedPath;          // 首个失败条目的目标路径（空=全部成功）
     SbieStatus status = SbieStatus::OK;   // 首个失败的语义码（成功=OK）
     unsigned long win32Error = 0;     // 首个失败的原始 GetLastError（诊断）
+    // 波 B（07-P1-3）additive：OnFileRecovery 检查器拒绝的条目（跳过、不
+    // 计失败——被拒文件保持沙箱内原样，输出侧列出）
+    unsigned long long skippedFiles = 0;
+    std::vector<std::wstring> skippedPaths;
+};
+
+// 波 B（07-P1-3）additive：recover copy 的行为选项
+struct RecoverCopyOptions {
+    bool move = false;          // CopyFileW 成功后 DeleteFileW 沙箱源（移动语义）
+    bool runCheckers = true;    // 恢复前执行箱键 OnFileRecovery 的检查器命令
 };
 
 class RecoveryManager {
@@ -65,6 +75,19 @@ public:
     SbieStatus Copy(const std::vector<std::wstring>& sandboxPaths,
                     const std::wstring& toDir, bool overwrite,
                     RecoverCopyOutcome* out);
+
+    // 波 B（07-P1-3）additive 扩展签名：Copy 的超集——
+    //   * opts.move：CopyFileW 成功后 DeleteFileW 沙箱源（SandMan 恢复的
+    //     移动语义；删源失败 = 该条目失败、已拷出的目标保留）；
+    //   * opts.runCheckers：恢复前对每个文件执行箱键 OnFileRecovery 的
+    //     检查器命令（值原样读出 + %SANDBOX% 展开 + 追加带引号的沙箱路径
+    //     参数，宿主执行、≤15s/条；任一检查器非零退出 = 拒绝该文件——
+    //     记入 outcome.skipped*、跳过不拷贝、继续其余文件；07 记录的
+    //     SandMan 校验器语义，docs/04 §17 决策）。
+    // 被跳过条目不算失败（整体 OK）；其余语义与 Copy 一致。
+    SbieStatus CopyEx(const std::vector<std::wstring>& sandboxPaths,
+                      const std::wstring& toDir, bool overwrite,
+                      const RecoverCopyOptions& opts, RecoverCopyOutcome* out);
 
 private:
     BoxInfo box_;

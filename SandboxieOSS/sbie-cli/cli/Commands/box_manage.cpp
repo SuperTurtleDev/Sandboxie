@@ -60,6 +60,82 @@ int RenderBoxInfoIpc(const GlobalOptions& o, const json::JsonValue& data)
         obj);
 }
 
+// 递归删除目录（对齐 Model Boxes.cpp 的 DeleteDirRecursive 行为：只读属性
+// 清理 + 句柄释放 500ms×20 重试）——server 侧 Guardian.cpp 有同构副本
+SbieStatus DeleteDirRecursiveLocal(const std::wstring& dir)
+{
+    if (dir.empty())
+        return SbieStatus::GENERIC;
+    DWORD at = GetFileAttributesW(dir.c_str());
+    if (at == INVALID_FILE_ATTRIBUTES)
+        return SbieStatus::OK;   // 不存在 = 已删
+    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
+        return SbieStatus::GENERIC;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return SbieStatus::GENERIC;
+    SbieStatus st = SbieStatus::OK;
+    do {
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..")
+            continue;
+        std::wstring full = dir + L"\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            st = DeleteDirRecursiveLocal(full);
+        else {
+            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
+            if (!DeleteFileW(full.c_str()))
+                st = SbieStatus::GENERIC;
+        }
+        if (st != SbieStatus::OK)
+            break;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (st != SbieStatus::OK)
+        return st;
+    for (int i = 0; i < 20; ++i) {
+        SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_NORMAL);
+        if (RemoveDirectoryW(dir.c_str()))
+            return SbieStatus::OK;
+        if (i < 19)
+            Sleep(500);
+    }
+    return SbieStatus::GENERIC;
+}
+
+// 清空目录内容、保留目录本身（CleanBoxFolders 语义）
+SbieStatus CleanDirContents(const std::wstring& dir)
+{
+    DWORD at = GetFileAttributesW(dir.c_str());
+    if (at == INVALID_FILE_ATTRIBUTES)
+        return SbieStatus::OK;   // 未初始化的 box：无目录即已清空
+    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
+        return SbieStatus::GENERIC;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return SbieStatus::GENERIC;
+    SbieStatus st = SbieStatus::OK;
+    do {
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..")
+            continue;
+        std::wstring full = dir + L"\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            st = DeleteDirRecursiveLocal(full);
+        else {
+            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
+            if (!DeleteFileW(full.c_str()))
+                st = SbieStatus::GENERIC;
+        }
+        if (st != SbieStatus::OK)
+            break;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return st;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -531,7 +607,10 @@ int CmdBoxRename(const CommandContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
-// sbie box delete <name> [--files] [--keep-section]
+// sbie box delete <name> [--files] [--keep-section] [--no-triggers]
+// 波次 A（07-P0-1）：--files 删除内容前逐条执行该箱 OnBoxDelete 触发器
+//（Model RunBoxTriggers：逐条、宿主执行、≤15s/条、失败继续）；--no-triggers
+// 逃生旗标跳过。
 // ---------------------------------------------------------------------------
 
 int CmdBoxDelete(const CommandContext& ctx)
@@ -543,22 +622,25 @@ int CmdBoxDelete(const CommandContext& ctx)
     if (pos.size() < 1)
         return EmitError(ctx.opts, SbieStatus::USAGE,
                          L"usage: sbie-cli box delete <name> [--files] "
-                         L"[--keep-section]");
+                         L"[--keep-section] [--no-triggers]");
 
     const std::wstring& name = pos[0];
     const bool delFiles = boxproc::HasFlag(ctx.args, L"--files");
     const bool delSection = !boxproc::HasFlag(ctx.args, L"--keep-section");
+    const bool noTriggers = boxproc::HasFlag(ctx.args, L"--no-triggers");
     if (!delFiles && !delSection)
         return EmitError(ctx.opts, SbieStatus::USAGE,
                          L"nothing to delete: use --files and/or remove "
                          L"--keep-section");
 
-    // 写路径（非幂等，retry=false；params.password = P0-11）
+    // 写路径（非幂等，retry=false；params.password = P0-11；no_triggers =
+    // 07-P0-1 的 --no-triggers）
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"name", name);
         ipcroute::PSet(&params, L"files", delFiles);
         ipcroute::PSet(&params, L"keep_section", !delSection);
+        ipcroute::PSet(&params, L"no_triggers", noTriggers);
         const std::wstring pw = boxproc::ResolvePasswordArgs(ctx.opts,
                                                              ctx.args);
         if (!pw.empty())
@@ -573,19 +655,36 @@ int CmdBoxDelete(const CommandContext& ctx)
             return r.exitCode;
     }
 
-    // 直连（pw-aware）：检查 + 目录删除走 Model（节删拆出——ConfigStore 的
-    // Delete 带 password 形参，Model BoxRepository::Delete 内部固定空密码）
+    // 直连（pw-aware）：检查与目录删除与 server HBoxDelete 同序
+    //（存在 → BOX_BUSY → NeverDelete → 触发器 → 目录 → 节）
     const std::wstring pw = boxproc::ResolvePasswordArgs(ctx.opts, ctx.args);
-    SbieStatus st = MakeRepo().Delete(name, delFiles, false);
-    if (st == SbieStatus::BOX_BUSY)
+    model::BoxInfo bi;
+    SbieStatus st = MakeRepo().GetInfo(name, &bi);
+    if (st != SbieStatus::OK)
+        return EmitError(ctx.opts, st, L"box '" + name + L"' not found");
+    if (bi.hasProcesses)
         return EmitError(ctx.opts, SbieStatus::BOX_BUSY,
                          L"box '" + name + L"' has running processes; "
                          L"terminate them first (proc kill-all / proc kill)");
-    if (st == SbieStatus::ACCESS_DENIED)
-        return EmitError(ctx.opts, SbieStatus::ACCESS_DENIED,
-                         L"box '" + name + L"' is protected (NeverDelete=y)");
-    if (st != SbieStatus::OK)
-        return EmitError(ctx.opts, st, L"box delete failed");
+
+    if (delFiles) {
+        // NeverDelete 保护（对齐 CleanBox 的 SB_DeleteProtect）
+        auto nd = model::ConfigStore().Get(name, L"NeverDelete", 0, true,
+                                           true);
+        if (nd.has_value() && *nd == L"y")
+            return EmitError(ctx.opts, SbieStatus::ACCESS_DENIED,
+                             L"box '" + name + L"' is protected"
+                             L" (NeverDelete=y)");
+        // OnBoxDelete 触发器：删除内容前逐条执行（07-P0-1；失败不阻断删除）
+        if (!noTriggers)
+            (void)model::RunBoxTriggers(name, L"OnBoxDelete");
+        if (!bi.fileRoot.empty()) {
+            st = DeleteDirRecursiveLocal(bi.fileRoot);
+            if (st != SbieStatus::OK)
+                return EmitError(ctx.opts, st,
+                                 L"box delete failed (file error)");
+        }
+    }
 
     if (delSection) {
         st = model::ConfigStore().Delete(name, L"*", std::nullopt, true, pw);
@@ -668,91 +767,12 @@ int CmdBoxEnable(const CommandContext& ctx)  { return CmdBoxSetEnabled(ctx, true
 int CmdBoxDisable(const CommandContext& ctx) { return CmdBoxSetEnabled(ctx, false); }
 
 // ---------------------------------------------------------------------------
-// sbie box clean <name>（P0-4；04 §4.3：清空沙箱内容、保留节）
+// sbie box clean <name> [--no-triggers]（P0-4；04 §4.3：清空沙箱内容、保留节）
 // 语义对齐 CSandBox::CleanBox（06 §P0-4 建议的"拒+提示"变体，与 delete 一致）：
 //   NeverDelete=y → ACCESS_DENIED；有活动进程 → BOX_BUSY（提示 proc kill-all）；
-//   否则递归删 FileRoot 内容（保留 FileRoot 目录本身与 ini 节）。
+//   否则先逐条执行 OnBoxDelete 触发器（07-P0-1；--no-triggers 跳过），再递归
+//   删 FileRoot 内容（保留 FileRoot 目录本身与 ini 节）。
 // ---------------------------------------------------------------------------
-
-namespace {
-
-// 递归删除目录（对齐 Model Boxes.cpp 的 DeleteDirRecursive 行为：只读属性
-// 清理 + 句柄释放 500ms×20 重试）——server 侧 Dispatcher.cpp 有同构副本
-SbieStatus DeleteDirRecursiveLocal(const std::wstring& dir)
-{
-    if (dir.empty())
-        return SbieStatus::GENERIC;
-    DWORD at = GetFileAttributesW(dir.c_str());
-    if (at == INVALID_FILE_ATTRIBUTES)
-        return SbieStatus::OK;   // 不存在 = 已删
-    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
-        return SbieStatus::GENERIC;
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return SbieStatus::GENERIC;
-    SbieStatus st = SbieStatus::OK;
-    do {
-        std::wstring name = fd.cFileName;
-        if (name == L"." || name == L"..")
-            continue;
-        std::wstring full = dir + L"\\" + name;
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            st = DeleteDirRecursiveLocal(full);
-        else {
-            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-            if (!DeleteFileW(full.c_str()))
-                st = SbieStatus::GENERIC;
-        }
-        if (st != SbieStatus::OK)
-            break;
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    if (st != SbieStatus::OK)
-        return st;
-    for (int i = 0; i < 20; ++i) {
-        SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_NORMAL);
-        if (RemoveDirectoryW(dir.c_str()))
-            return SbieStatus::OK;
-        if (i < 19)
-            Sleep(500);
-    }
-    return SbieStatus::GENERIC;
-}
-
-// 清空目录内容、保留目录本身（CleanBoxFolders 语义）
-SbieStatus CleanDirContents(const std::wstring& dir)
-{
-    DWORD at = GetFileAttributesW(dir.c_str());
-    if (at == INVALID_FILE_ATTRIBUTES)
-        return SbieStatus::OK;   // 未初始化的 box：无目录即已清空
-    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
-        return SbieStatus::GENERIC;
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return SbieStatus::GENERIC;
-    SbieStatus st = SbieStatus::OK;
-    do {
-        std::wstring name = fd.cFileName;
-        if (name == L"." || name == L"..")
-            continue;
-        std::wstring full = dir + L"\\" + name;
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            st = DeleteDirRecursiveLocal(full);
-        else {
-            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-            if (!DeleteFileW(full.c_str()))
-                st = SbieStatus::GENERIC;
-        }
-        if (st != SbieStatus::OK)
-            break;
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    return st;
-}
-
-} // namespace
 
 int CmdBoxClean(const CommandContext& ctx)
 {
@@ -762,14 +782,16 @@ int CmdBoxClean(const CommandContext& ctx)
     std::vector<std::wstring> pos = boxproc::Positional(ctx.args);
     if (pos.size() < 1)
         return EmitError(ctx.opts, SbieStatus::USAGE,
-                         L"usage: sbie-cli box clean <name>");
+                         L"usage: sbie-cli box clean <name> [--no-triggers]");
     const std::wstring& name = pos[0];
+    const bool noTriggers = boxproc::HasFlag(ctx.args, L"--no-triggers");
 
     // 写路径（非幂等，retry=false；box.clean —— 纯文件操作，server 不触
-    // SbieSvc；NeverDelete/进程检查两侧同序）
+    // SbieSvc；NeverDelete/进程检查两侧同序；no_triggers = 07-P0-1 旗标）
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"name", name);
+        ipcroute::PSet(&params, L"no_triggers", noTriggers);
         ipcroute::Result r = ipcroute::Invoke(
             ctx.opts, ipc::kOpBoxClean, params, false,
             [](const GlobalOptions& o, const json::JsonValue&) {
@@ -783,8 +805,7 @@ int CmdBoxClean(const CommandContext& ctx)
     model::BoxInfo bi;
     SbieStatus st = MakeRepo().GetInfo(name, &bi);
     if (st != SbieStatus::OK)
-        return EmitError(ctx.opts, SbieStatus::NOT_FOUND,
-                         L"box '" + name + L"' not found");
+        return EmitError(ctx.opts, st, L"box '" + name + L"' not found");
 
     // NeverDelete 保护（对齐 CleanBox 的 SB_DeleteProtect）
     auto nd = model::ConfigStore().Get(name, L"NeverDelete", 0, true, true);
@@ -796,6 +817,10 @@ int CmdBoxClean(const CommandContext& ctx)
         return EmitError(ctx.opts, SbieStatus::BOX_BUSY,
                          L"box '" + name + L"' has running processes; "
                          L"terminate them first (proc kill-all / proc kill)");
+
+    // OnBoxDelete 触发器：清空前逐条执行（07-P0-1；失败不阻断清理）
+    if (!noTriggers)
+        (void)model::RunBoxTriggers(name, L"OnBoxDelete");
 
     if (!bi.fileRoot.empty()) {
         st = CleanDirContents(bi.fileRoot);

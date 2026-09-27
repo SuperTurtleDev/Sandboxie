@@ -28,6 +28,9 @@ int wmain(int argc, wchar_t** argv)
             if (args[i] == L"--idle-timeout" && i + 1 < args.size()) {
                 const long v = wcstol(args[++i].c_str(), nullptr, 10);
                 so.idleTimeoutSec = v > 0 ? (ULONG)v : 0; // <=0 = 不退出
+            } else if (args[i] == L"--no-guardians") {
+                // 空箱守护监视器关（波次 A，07-P0-2；server start 透传）
+                so.noGuardians = true;
             }
         }
         return sbie::server::RunServer(so);

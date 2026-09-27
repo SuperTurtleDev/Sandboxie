@@ -283,4 +283,89 @@ SbieStatus BoxRepository::ValidateName(const std::wstring& name)
     return SbieStatus::OK;
 }
 
+namespace {
+
+// %SANDBOX% → box 名（大小写不敏感；%SANDBOXPATH% 等其余 SandMan 变量
+// 07 未记录 → 不替换，04 §16 决策）。注意匹配含两侧 '%'，"%SANDBOXPATH%"
+// 不会误匹配（%SANDBOX% 要求闭百分号紧跟 X 之后）。
+void ReplaceSandboxVar(std::wstring* s, const std::wstring& box)
+{
+    static const wchar_t* kVar = L"%sandbox%";
+    const size_t varLen = 9;
+    for (size_t pos = 0; pos < s->size();) {
+        size_t hit = std::wstring::npos;
+        for (size_t i = pos; i + varLen <= s->size(); ++i) {
+            size_t j = 0;
+            for (; j < varLen; ++j) {
+                wchar_t a = (*s)[i + j];
+                wchar_t b = kVar[j];
+                if (a >= L'A' && a <= L'Z')
+                    a += 32;
+                if (a != b)
+                    break;
+            }
+            if (j == varLen) {
+                hit = i;
+                break;
+            }
+        }
+        if (hit == std::wstring::npos)
+            return;
+        s->replace(hit, varLen, box);
+        pos = hit + box.size();
+    }
+}
+
+} // namespace
+
+std::wstring ExpandSandboxVar(const std::wstring& text, const std::wstring& box)
+{
+    std::wstring out = text;
+    ReplaceSandboxVar(&out, box);
+    return out;
+}
+
+SbieStatus RunBoxTriggers(const std::wstring& box, const std::wstring& setting,
+                          TriggerStats* out)
+{
+    // 原样读值（noExpand=true：见 Boxes.h 头注——驱动展开在 SYSTEM 上下文，
+    // 会破坏 %TEMP% 等用户变量；展开交给子进程）
+    std::vector<std::wstring> cmds = ConfigStore().GetList(box, setting);
+    TriggerStats stats;
+    for (const std::wstring& raw : cmds) {
+        std::wstring cmd = raw;
+        ReplaceSandboxVar(&cmd, box);
+        if (cmd.empty())
+            continue;
+        // CreateProcessW 需要可写命令行缓冲
+        std::wstring mutableCmd = cmd;
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        BOOL ok = CreateProcessW(nullptr, &mutableCmd[0], nullptr, nullptr,
+                                 FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                                 &si, &pi);
+        if (!ok) {
+            ++stats.failed;
+            continue;
+        }
+        // 逐条：等待完成（≤15s，超时不杀——04 §16 决策）
+        if (WaitForSingleObject(pi.hProcess, 15000) == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            GetExitCodeProcess(pi.hProcess, &code);
+            if (code != 0)
+                ++stats.failed;
+            else
+                ++stats.run;
+        } else {
+            ++stats.failed;   // 超时：进程存活，按失败计数但继续
+        }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    if (out)
+        *out = stats;
+    return SbieStatus::OK;
+}
+
 } // namespace sbie::model

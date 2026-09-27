@@ -33,9 +33,12 @@ namespace sbie::cli {
 
 // 注册函数清单（接线 agent 在 RegisterCommands() 之后依序调用）
 void RegisterBoxCreateCommands();     // box_create.cpp   → box create
+                                      //    (--type 预设) + box types
 void RegisterBoxManageCommands();     // box_manage.cpp   → box info/get/set/
                                       //    list-setting/rename/delete/
                                       //    enable/disable/clean/size
+void RegisterBoxTransferCommands();   // box_transfer.cpp → box copy/export/
+                                      //    import（07-P1-2/4）
 void RegisterBoxSnapshotCommands();   // box_snapshot.cpp → box snapshot
                                       //    list/take/remove/select/set-info
 void RegisterBoxRecoverCommands();    // box_recover.cpp  → box recover
@@ -115,7 +118,7 @@ inline std::vector<std::wstring> Positional(const std::vector<std::wstring>& arg
 {
     static const wchar_t* const kValueFlags[] = {
         L"--index", L"--dir", L"--info", L"--name", L"--section",
-        L"--template", L"--password", L"--sbie-dll-path", L"--to",
+        L"--template", L"--password", L"--sbie-dll-path", L"--to", L"--type",
     };
     std::vector<std::wstring> out;
     for (size_t i = 2; i < args.size(); ++i) {

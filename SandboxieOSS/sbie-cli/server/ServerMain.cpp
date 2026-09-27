@@ -12,6 +12,7 @@
 
 #include "ServerMain.h"
 #include "Dispatcher.h"
+#include "Guardian.h"
 #include "LogPump.h"
 #include "ServerState.h"
 #include "SvcProxy.h"
@@ -447,6 +448,18 @@ int RunServer(const ServerOptions& options)
     RegisterBuiltinOps();
     StartSvcProxy();
 
+    // 3.5) 空箱守护监视器（07-P0-2，docs/04 §16）：--no-guardians 显式关 >
+    //      GlobalSettings\GuardiansEnabled=n 关 > 缺省开。SvcProxy 已就位
+    //      （AutoRemove 的节删除经 SvcCall）；不依赖 session leader（轮询
+    //      驱动，与日志泵不同），仅需 SbieDll + 驱动在场。
+    if (options.noGuardians) {
+        DiagServer("sbie-cli server: guardians disabled (--no-guardians)");
+    } else if (!StartGuardians(false)) {
+        DiagServer("sbie-cli server: guardians not started (disabled by"
+                   " config GuardiansEnabled=n, driver absent, or thread"
+                   " failure)");
+    }
+
     // 4) 单实例锁 2/2：管道首实例（FILE_FLAG_FIRST_PIPE_INSTANCE 抢占）
     PipeSecurity sec;
     if (!sec.Build())
@@ -456,6 +469,7 @@ int RunServer(const ServerOptions& options)
     HANDLE first = CreatePipeInstance(true, sa);
     if (!first) {
         const DWORD e = GetLastError();
+        StopGuardians();
         StopInteractivePump();
         StopLogPump();
         StopSvcProxy();
@@ -471,12 +485,13 @@ int RunServer(const ServerOptions& options)
     }
 
     {
-        char buf[160];
+        char buf[176];
         snprintf(buf, std::size(buf),
                  "sbie-cli server: ready (session %lu, pid %lu, idle %lus,"
-                 " leader %d)",
+                 " leader %d, guardians %d)",
                  (unsigned long)session, (unsigned long)GetCurrentProcessId(),
-                 (unsigned long)options.idleTimeoutSec, leaderTaken ? 1 : 0);
+                 (unsigned long)options.idleTimeoutSec, leaderTaken ? 1 : 0,
+                 GuardiansActive() ? 1 : 0);
         DiagServer(buf);
     }
 
@@ -510,6 +525,7 @@ int RunServer(const ServerOptions& options)
     Sleep(100); // accept 线程收尾余量
 
     // 8) 回收（泵/SvcProxy 以停机事件/quit 标志快速退出）
+    StopGuardians();
     StopInteractivePump();
     StopLogPump();
     StopSvcProxy();

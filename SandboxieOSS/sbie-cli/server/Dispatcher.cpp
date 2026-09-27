@@ -7,12 +7,14 @@
 // 直连模式的 --json 输出一致——接线 agent 按 data 数组渲染表格）。
 
 #include "Dispatcher.h"
+#include "Guardian.h"
 #include "LogPump.h"
 #include "ServerState.h"
 #include "SvcProxy.h"
 #include "../ipcc/SbieIpc.h"
 #include "../../SbieCore/DriverApi/DriverApi.h"
 #include "../../SbieCore/Model/Boxes.h"
+#include "../../SbieCore/Model/BoxTransfer.h"
 #include "../../SbieCore/Model/BoxUsage.h"
 #include "../../SbieCore/Model/ConfigStore.h"
 #include "../../SbieCore/Model/Processes.h"
@@ -195,6 +197,11 @@ OpResult HStatus(const json::JsonValue&, const std::shared_ptr<Connection>&)
         srv.set(L"idle_remaining_sec",
                 json::JsonValue((long long)(idle / 1000)));
     srv.set(L"log_pump", json::JsonValue(ServerState::Get().LogPumpActive()));
+    // 空箱守护监视器（波次 A，07-P0-2）：运行状态 + 已处理空箱事件计数
+    //（client `server status` 的 GUARDIANS 列）
+    srv.set(L"guardians", json::JsonValue(GuardiansActive()));
+    srv.set(L"guardian_fires",
+            json::JsonValue((long long)GuardiansFired()));
     data.set(L"server", srv);
 
     data.set(L"boxes", json::JsonValue((long long)boxCount));
@@ -585,81 +592,16 @@ SbieStatus GetBoxInfoSafe(const std::wstring& name, model::BoxInfo* out)
     return repo.GetInfo(name, out);   // GetInfo 不触 SbieSvc（Boxes.cpp）
 }
 
-// 递归删除目录（对齐 Model Boxes.cpp 的 DeleteDirRecursive：只读属性清理 +
-// 句柄释放 500ms×20 重试；cli\Commands\box_manage.cpp 有同构副本——两侧
-// 分属 cli/server 模块，04 §1 禁止互相引用）
-SbieStatus DeleteDirRecursiveLocal(const std::wstring& dir)
+// 内容清理执行器（波次 A，07-P0-1/07-P0-2）：NeverDelete 检查 → OnBoxDelete
+// 触发器（noTriggers=false）→ CleanContents/RemoveRoot。文件递归删除器与
+// clean 语义现统一在 server\Guardian.cpp（本文件原同构副本已并入）。
+SbieStatus PurgeBoxContents(const std::wstring& name, bool removeRoot,
+                            bool noTriggers)
 {
-    if (dir.empty())
-        return SbieStatus::GENERIC;
-    DWORD at = GetFileAttributesW(dir.c_str());
-    if (at == INVALID_FILE_ATTRIBUTES)
-        return SbieStatus::OK;   // 不存在 = 已删
-    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
-        return SbieStatus::GENERIC;
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return SbieStatus::GENERIC;
-    SbieStatus st = SbieStatus::OK;
-    do {
-        std::wstring name = fd.cFileName;
-        if (name == L"." || name == L"..")
-            continue;
-        std::wstring full = dir + L"\\" + name;
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            st = DeleteDirRecursiveLocal(full);
-        } else {
-            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-            if (!DeleteFileW(full.c_str()))
-                st = SbieStatus::GENERIC;
-        }
-        if (st != SbieStatus::OK)
-            break;
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    if (st != SbieStatus::OK)
-        return st;
-    for (int i = 0; i < 20; ++i) {
-        SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_NORMAL);
-        if (RemoveDirectoryW(dir.c_str()))
-            return SbieStatus::OK;
-        if (i < 19)
-            Sleep(500);
-    }
-    return SbieStatus::GENERIC;
-}
-
-// 清空目录内容、保留目录本身（box.clean = CleanBoxFolders 语义，P0-4）
-SbieStatus CleanDirContents(const std::wstring& dir)
-{
-    DWORD at = GetFileAttributesW(dir.c_str());
-    if (at == INVALID_FILE_ATTRIBUTES)
-        return SbieStatus::OK;   // 未初始化的 box：无目录即已清空
-    if (!(at & FILE_ATTRIBUTE_DIRECTORY))
-        return SbieStatus::GENERIC;
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return SbieStatus::GENERIC;
-    SbieStatus st = SbieStatus::OK;
-    do {
-        std::wstring name = fd.cFileName;
-        if (name == L"." || name == L"..")
-            continue;
-        std::wstring full = dir + L"\\" + name;
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            st = DeleteDirRecursiveLocal(full);
-        } else {
-            SetFileAttributesW(full.c_str(), FILE_ATTRIBUTE_NORMAL);
-            if (!DeleteFileW(full.c_str()))
-                st = SbieStatus::GENERIC;
-        }
-        if (st != SbieStatus::OK)
-            break;
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    return st;
+    return ExecuteBoxPurge(name,
+                           removeRoot ? PurgeMode::RemoveRoot
+                                      : PurgeMode::CleanContents,
+                           noTriggers);
 }
 
 // NeverDelete 保护读取（纯驱动缓存读，worker 线程安全）
@@ -687,10 +629,22 @@ OpResult HBoxCreate(const json::JsonValue& params,
             if (t.isString())
                 tpls.push_back(t.asString());
     }
+    // 波 B（07-P1-1）：--type 预设（缺省空 = 现行为 Enabled=y）
+    std::wstring typeStr;
+    GetStr(params, L"type", &typeStr);
+    const model::BoxTypePreset* preset = nullptr;
+    if (!typeStr.empty()) {
+        preset = model::FindBoxTypePreset(typeStr);
+        if (!preset)
+            return OpResult::Fail(SbieStatus::INVALID,
+                                  L"unknown box type '" + typeStr
+                                  + L"' (see: sbie-cli box types)");
+    }
 
     // pw-aware（P0-11）：Create = SET Enabled=y（Model BoxRepository::Create
-    // 同款 IniSetSetting，密码透传）；模板 = Info 存在性检查 + Append
-    // Template=<名>（与 client 直连 / template apply 同序）
+    // 同款 IniSetSetting，密码透传）；--type = 预设键组（Enabled 之后）；
+    // 模板 = Info 存在性检查 + Append Template=<名>（与 client 直连 /
+    // template apply 同序）
     const std::wstring pw = ResolvePasswordParam(params);
 
     bool enabled = false, exists = false;
@@ -709,6 +663,11 @@ OpResult HBoxCreate(const json::JsonValue& params,
                                          true, pw);
         if (s != SbieStatus::OK)
             return s;
+        if (preset) {
+            s = model::ApplyBoxTypeKeys(name, *preset, pw);
+            if (s != SbieStatus::OK)
+                return s;
+        }
         for (const std::wstring& tpl : tpls) {
             model::TemplateRegistry treg(nullptr, svc);
             std::vector<std::pair<std::wstring, std::wstring>> probe;
@@ -738,7 +697,11 @@ OpResult HBoxCreate(const json::JsonValue& params,
                               + std::wstring(PasswordHintText(st, pw)));
 
     json::JsonValue data = json::JsonValue::Object();
-    data.set(L"message", json::JsonValue(L"box '" + name + L"' created"));
+    data.set(L"message",
+             json::JsonValue(preset
+                 ? L"box '" + name + L"' created (type: "
+                   + std::wstring(preset->type) + L")"
+                 : L"box '" + name + L"' created"));
     return OpResult::Succeed(std::move(data));
 }
 
@@ -823,9 +786,12 @@ OpResult HBoxDelete(const json::JsonValue& params,
         return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
     const bool delFiles = GetBool(params, L"files", false);
     const bool keepSection = GetBool(params, L"keep_section", false);
+    // no_triggers（波次 A，07-P0-1）：--no-triggers 逃生旗标——跳过内容删除
+    // 前的 OnBoxDelete 触发器（仅 --files 路径执行触发器）
+    const bool noTriggers = GetBool(params, L"no_triggers", false);
     // pw-aware（P0-11）：节删除经 ConfigStore::Delete 带 password 形参
     //（Model BoxRepository::Delete 内部固定空密码）；检查与目录删除逻辑
-    // 与 Model Delete 同序（存在 → BOX_BUSY → NeverDelete → 目录 → 节）
+    // 与 Model Delete 同序（存在 → BOX_BUSY → NeverDelete → 触发器 → 目录 → 节）
     const std::wstring pw = ResolvePasswordParam(params);
 
     model::BoxInfo bi;
@@ -847,11 +813,10 @@ OpResult HBoxDelete(const json::JsonValue& params,
             return OpResult::Fail(SbieStatus::ACCESS_DENIED,
                                   L"box '" + name + L"' is protected"
                                   L" (NeverDelete=y)");
-        if (!bi.fileRoot.empty()) {
-            st = DeleteDirRecursiveLocal(bi.fileRoot);
-            if (st != SbieStatus::OK)
-                return OpResult::Fail(st, L"box delete failed (file error)");
-        }
+        // 内容删除（含 OnBoxDelete 触发器——删除内容前逐条执行，07-P0-1）
+        st = PurgeBoxContents(name, true /*RemoveRoot*/, noTriggers);
+        if (st != SbieStatus::OK)
+            return OpResult::Fail(st, L"box delete failed (file error)");
     }
 
     if (!keepSection) {
@@ -1470,13 +1435,16 @@ OpResult HBoxSetEnabled(const json::JsonValue& params,
 // box.clean（P0-4）：清空 FileRoot 内容、保留目录与 ini 节。
 // 语义（06 §P0-4 建议，与 box delete 一致）：NeverDelete → ACCESS_DENIED；
 // 有活动进程 → BOX_BUSY（提示 proc kill-all）；纯文件操作（worker 线程，
-// 不触 SbieSvc）
+// 不触 SbieSvc）。波次 A（07-P0-1）：清空前逐条执行 OnBoxDelete 触发器
+//（no_triggers=true 跳过——--no-triggers 逃生旗标）；守护监视器的
+// AutoDelete 行为复用同一执行器（Guardian.cpp ExecuteBoxPurge）。
 OpResult HBoxClean(const json::JsonValue& params,
                    const std::shared_ptr<Connection>&)
 {
     std::wstring name;
     if (!GetStr(params, L"name", &name) || name.empty())
         return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
+    const bool noTriggers = GetBool(params, L"no_triggers", false);
 
     model::BoxInfo bi;
     SbieStatus st = GetBoxInfoSafe(name, &bi);
@@ -1496,13 +1464,11 @@ OpResult HBoxClean(const json::JsonValue& params,
                               L" terminate them first (proc kill-all /"
                               L" proc kill)");
 
-    if (!bi.fileRoot.empty()) {
-        st = CleanDirContents(bi.fileRoot);
-        if (st != SbieStatus::OK)
-            return OpResult::Fail(st,
-                                  L"box clean failed (file error; retry"
-                                  L" after handles release)");
-    }
+    st = PurgeBoxContents(name, false /*CleanContents*/, noTriggers);
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st,
+                              L"box clean failed (file error; retry"
+                              L" after handles release)");
     json::JsonValue data = json::JsonValue::Object();
     data.set(L"message", json::JsonValue(L"cleaned"));
     return OpResult::Succeed(std::move(data));
@@ -1723,7 +1689,10 @@ OpResult HRecoverList(const json::JsonValue& params,
 
 // recover.copy（P0-12）：真实文件 IO 在 server 侧（架构决策 docs/04 §14）。
 // params：name / paths[]（沙箱绝对路径，client 经 recover.list 解析）/ to?
-// / overwrite?。写语义（client retry=false）
+// / overwrite? / move?（波 B 07-P1-3：CopyFileW 成功后 DeleteFileW 沙箱源）
+// / on_file_recovery?（波 B 07-P1-3：恢复前执行箱键 OnFileRecovery 的检查器
+// 命令，非零退出 = 拒绝该文件——跳过并列出；缺省 true，--no-check 关）。
+// 写语义（client retry=false）
 OpResult HRecoverCopy(const json::JsonValue& params,
                       const std::shared_ptr<Connection>&)
 {
@@ -1743,6 +1712,8 @@ OpResult HRecoverCopy(const json::JsonValue& params,
     std::wstring to;
     GetStr(params, L"to", &to);   // 可选：空 = 恢复到原位
     const bool overwrite = GetBool(params, L"overwrite", false);
+    const bool move = GetBool(params, L"move", false);
+    const bool onFileRecovery = GetBool(params, L"on_file_recovery", true);
 
     model::BoxInfo bi;
     SbieStatus st = GetBoxInfoSafe(name, &bi);
@@ -1752,8 +1723,12 @@ OpResult HRecoverCopy(const json::JsonValue& params,
     if (st != SbieStatus::OK)
         return OpResult::Fail(st, L"query failed for box: " + name);
 
+    model::RecoverCopyOptions opts;
+    opts.move = move;
+    opts.runCheckers = onFileRecovery;
     model::RecoverCopyOutcome outcome;
-    st = model::RecoveryManager(bi).Copy(paths, to, overwrite, &outcome);
+    st = model::RecoveryManager(bi).CopyEx(paths, to, overwrite, opts,
+                                           &outcome);
     if (st != SbieStatus::OK) {
         std::wstring msg = L"recover copy failed at: " + outcome.failedPath;
         if (outcome.win32Error == ERROR_FILE_EXISTS)
@@ -1768,11 +1743,26 @@ OpResult HRecoverCopy(const json::JsonValue& params,
     json::JsonValue data = json::JsonValue::Object();
     data.set(L"copied", json::JsonValue((long long)outcome.copiedFiles));
     data.set(L"bytes", json::JsonValue((long long)outcome.copiedBytes));
+    if (outcome.skippedFiles > 0) {
+        data.set(L"skipped",
+                 json::JsonValue((long long)outcome.skippedFiles));
+        json::JsonValue skipped = json::JsonValue::Array();
+        for (const std::wstring& p : outcome.skippedPaths)
+            skipped.pushBack(json::JsonValue(p));
+        data.set(L"skipped_paths", std::move(skipped));
+    }
     data.set(L"message",
              json::JsonValue(std::to_wstring(outcome.copiedFiles)
-                             + L" file(s) recovered ("
+                             + L" file(s) "
+                             + (move ? L"moved" : L"recovered") + L" ("
                              + FormatHumanBytes(outcome.copiedBytes)
-                             + L")"));
+                             + L")"
+                             + (outcome.skippedFiles > 0
+                                    ? L", "
+                                          + std::to_wstring(
+                                                outcome.skippedFiles)
+                                          + L" skipped by OnFileRecovery"
+                                    : L"")));
     return OpResult::Succeed(std::move(data));
 }
 
@@ -1826,6 +1816,152 @@ OpResult HRecoverAdd(const json::JsonValue& params,
     data.set(L"message",
              json::JsonValue(L"recover folder added: " + after.back()
                              + L" (" + folder + L")"));
+    return OpResult::Succeed(std::move(data));
+}
+
+// ---------------------------------------------------------------------------
+// 波次 B op（07-P1-1/2/4，docs/04 §17）：沙箱复制 / 导出 / 导入。
+//   * box.copy / box.import：节写入经 SvcProxy（CopyBox/ImportBox 内触
+//     SbieSvc）+ 文件 IO（专职线程上直执文件操作无碍）；
+//   * box.export：纯驱动读 + 文件 IO（worker 线程直执，无 SvcCall）。
+// data.message 与 client 直连路径输出文案一致。
+// ---------------------------------------------------------------------------
+
+// box.copy：params src/dst/content(bool)/password?
+OpResult HBoxCopy(const json::JsonValue& params,
+                  const std::shared_ptr<Connection>&)
+{
+    std::wstring src;
+    if (!GetStr(params, L"src", &src) || src.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'src'");
+    std::wstring dst;
+    if (!GetStr(params, L"dst", &dst) || dst.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'dst'");
+    if (_wcsicmp(src.c_str(), dst.c_str()) == 0)
+        return OpResult::Fail(SbieStatus::INVALID,
+                              L"source and destination are the same");
+    if (model::BoxRepository::ValidateName(dst) != SbieStatus::OK)
+        return OpResult::Fail(SbieStatus::INVALID,
+                              L"invalid box name '" + dst + L"' (max 38 chars"
+                              L" of A-Z a-z 0-9 _; reserved words excluded)");
+    const bool content = GetBool(params, L"content", false);
+    const std::wstring pw = ResolvePasswordParam(params);
+
+    model::TransferStats stats;
+    SbieStatus st = SvcCall([&] {
+        return model::CopyBox(src, dst, content, pw, &stats);
+    });
+    if (st == SbieStatus::NOT_FOUND)
+        return OpResult::Fail(SbieStatus::NOT_FOUND,
+                              L"box '" + src + L"' not found, or '" + dst
+                              + L"' already exists");
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"box copy");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st,
+                              L"box copy failed"
+                              + PasswordHintText(st, pw));
+
+    json::JsonValue data = json::JsonValue::Object();
+    if (content) {
+        data.set(L"files", json::JsonValue((long long)stats.files));
+        data.set(L"bytes", json::JsonValue((long long)stats.bytes));
+    }
+    data.set(L"message",
+             json::JsonValue(L"box '" + src + L"' copied to '" + dst + L"'"
+                             + (content
+                                    ? L" (" + std::to_wstring(stats.files)
+                                          + L" file(s), "
+                                          + FormatHumanBytes(stats.bytes)
+                                          + L")"
+                                    : L"")));
+    return OpResult::Succeed(std::move(data));
+}
+
+// box.export：params name/to/archive(bool)。纯文件 IO（worker 线程）。
+OpResult HBoxExport(const json::JsonValue& params,
+                    const std::shared_ptr<Connection>&)
+{
+    std::wstring name;
+    if (!GetStr(params, L"name", &name) || name.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
+    std::wstring to;
+    if (!GetStr(params, L"to", &to) || to.empty())
+        return OpResult::Fail(SbieStatus::USAGE, L"missing param 'to'");
+    const bool archive = GetBool(params, L"archive", false);
+
+    model::TransferStats stats;
+    std::wstring detail;
+    SbieStatus st = model::ExportBox(name, to, archive, &stats, &detail);
+    if (st == SbieStatus::NOT_FOUND)
+        return OpResult::Fail(SbieStatus::NOT_FOUND,
+                              L"box '" + name + L"' not found");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st,
+                              L"box export failed"
+                              + (detail.empty() ? L"" : L": " + detail));
+
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"files", json::JsonValue((long long)stats.files));
+    data.set(L"dirs", json::JsonValue((long long)stats.dirs));
+    data.set(L"bytes", json::JsonValue((long long)stats.bytes));
+    data.set(L"archive", json::JsonValue(archive));
+    data.set(L"message",
+             json::JsonValue(L"box '" + name + L"' exported to " + to
+                             + L" (" + std::to_wstring(stats.files)
+                             + L" file(s), "
+                             + FormatHumanBytes(stats.bytes) + L")"));
+    return OpResult::Succeed(std::move(data));
+}
+
+// box.import：params path/name/archive(bool)/password?
+OpResult HBoxImport(const json::JsonValue& params,
+                    const std::shared_ptr<Connection>&)
+{
+    std::wstring path;
+    if (!GetStr(params, L"path", &path) || path.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'path'");
+    std::wstring name;
+    if (!GetStr(params, L"name", &name) || name.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
+    const bool archive = GetBool(params, L"archive", false);
+    if (model::BoxRepository::ValidateName(name) != SbieStatus::OK)
+        return OpResult::Fail(SbieStatus::INVALID,
+                              L"invalid box name '" + name + L"' (max 38"
+                              L" chars of A-Z a-z 0-9 _; reserved words"
+                              L" excluded)");
+    const std::wstring pw = ResolvePasswordParam(params);
+
+    model::TransferStats stats;
+    std::wstring detail;
+    SbieStatus st = SvcCall([&] {
+        return model::ImportBox(path, name, archive, pw, &stats, &detail);
+    });
+    if (st == SbieStatus::NOT_FOUND)
+        return OpResult::Fail(SbieStatus::NOT_FOUND,
+                              L"box '" + name + L"' already exists, or"
+                              L" package not found: " + path);
+    if (st == SbieStatus::INVALID)
+        return OpResult::Fail(SbieStatus::INVALID,
+                              detail.empty() ? L"bad package: " + path
+                                             : detail);
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"box import");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st,
+                              L"box import failed"
+                              + (detail.empty() ? L"" : L": " + detail)
+                              + PasswordHintText(st, pw));
+
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"files", json::JsonValue((long long)stats.files));
+    data.set(L"dirs", json::JsonValue((long long)stats.dirs));
+    data.set(L"bytes", json::JsonValue((long long)stats.bytes));
+    data.set(L"message",
+             json::JsonValue(L"box '" + name + L"' imported from " + path
+                             + L" (" + std::to_wstring(stats.files)
+                             + L" file(s), "
+                             + FormatHumanBytes(stats.bytes) + L")"));
     return OpResult::Succeed(std::move(data));
 }
 
@@ -2043,6 +2179,11 @@ void RegisterBuiltinOps()
     // ---- P1 清尾波次（06 §P1-1，docs/04 §15；直驱动无 SbieSvc）----
     reg[ipc::kOpForceSet]      = HForceSet;
     reg[ipc::kOpForceStatus]   = HForceStatus;
+
+    // ---- 波次 B（07-P1-2/4，docs/04 §17）----
+    reg[ipc::kOpBoxCopy]       = HBoxCopy;
+    reg[ipc::kOpBoxExport]     = HBoxExport;
+    reg[ipc::kOpBoxImport]     = HBoxImport;
 
     // ---- 未实现（规范错误码；后续波次补齐）----
     // tpl.list/info/check：client 直连实现运行良好（audit 判降级可接受，

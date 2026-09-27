@@ -52,4 +52,34 @@ private:
     sbie::svc::SvcClient& svc_;
 };
 
+// ---------------------------------------------------------------------------
+// 触发器执行（波次 A：07-P0-1/07-P0-2，additive——不动上方冻结契约面）。
+// 语义（规格 docs/07 §3.1；实现决策记录 docs/04 §16）：
+//   * 逐条读取 box 节 <setting>（OnBoxDelete / OnBoxTerminate）的命令值，
+//     按 ini 顺序逐条执行（"逐条" = 前一条完成或超时后才启动下一条）；
+//   * 值保持原样（不走驱动 %env% 预展开——驱动在 SYSTEM 上下文展开会把
+//     %TEMP% 替换成 C:\WINDOWS\TEMP，语义错误）；%SANDBOX%（大小写不敏感）
+//     替换为 box 名（07 记录的 SandMan 触发器变量；其余变量未记录 → 不
+//     支持，见 04 §16）；%TEMP% 等 Windows 环境变量由子进程（通常 cmd.exe）
+//     在继承的宿主用户环境中自行展开；
+//   * CreateProcessW（继承环境、不继承句柄、CREATE_NO_WINDOW）宿主执行，
+//     每条等待 ≤15s（对齐 07-P1-3 记录的 SandMan 检查器 15s 超时习惯；
+//     超时不杀进程、继续下一条——CLI 侧无 SandMan 的"取消"交互面）；
+//   * 失败（启动失败 / 非零退出 / 超时）继续执行剩余命令（尽力而为语义，
+//     07 未记录 SandMan 的失败中止行为），计数经 out 返回；
+//   * 返回值恒 OK（键不存在 = 0 条命令，也是成功）。
+// ---------------------------------------------------------------------------
+struct TriggerStats {
+    unsigned run = 0;      // 成功启动的命令数
+    unsigned failed = 0;   // 启动失败 + 非零退出 + 超时
+};
+
+SbieStatus RunBoxTriggers(const std::wstring& box, const std::wstring& setting,
+                          TriggerStats* out = nullptr);
+
+// %SANDBOX%（大小写不敏感）→ box 名，其余原样（07 未记录的变量不支持，
+// 04 §16 决策）。波 B 起为共享助手（Recovery 的 OnFileRecovery 检查器命令
+// 与触发器执行器同款展开语义，docs/04 §17）。
+std::wstring ExpandSandboxVar(const std::wstring& text, const std::wstring& box);
+
 } // namespace sbie::model

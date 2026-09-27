@@ -43,4 +43,9 @@ bool StartInteractivePump();
 void StopInteractivePump();
 bool InteractivePumpActive();
 
+// 合成日志条目：入环形缓冲 + 推送 log.watch 订阅者（波次 A：空箱守护监视器
+// 的行为可见性——guardian 触发/清理经 log dump|watch 呈现，msgid=0 标记非
+// 驱动来源）。任意线程可调（内部自持环锁）。
+void AppendSyntheticLog(const std::wstring& text);
+
 } // namespace sbie::server

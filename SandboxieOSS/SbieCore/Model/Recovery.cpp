@@ -299,6 +299,44 @@ SbieStatus RecoveryManager::Copy(const std::vector<std::wstring>& sandboxPaths,
                                  const std::wstring& toDir, bool overwrite,
                                  RecoverCopyOutcome* out)
 {
+    // 原冻结签名行为保持：拷贝语义、无检查器（CLI/IPC 路径均走 CopyEx，
+    // 07-P1-3 的 move/检查器由调用方经 RecoverCopyOptions 开启）
+    RecoverCopyOptions legacy{};
+    legacy.move = false;
+    legacy.runCheckers = false;
+    return CopyEx(sandboxPaths, toDir, overwrite, legacy, out);
+}
+
+// OnFileRecovery 检查器（07-P1-3）：cmd 形态 = 键值（%SANDBOX% 展开）+
+// 空格 + 带引号的沙箱路径（SandMan CheckFilesAsync 的命令拼装语义——
+// SandManRecovery.cpp:196-228 记录于 docs/07 §2/§3.2）。宿主执行、
+// CREATE_NO_WINDOW、等待 ≤15s；非零退出（含启动失败/超时）= 拒绝。
+bool RunFileChecker(const std::wstring& cmd, const std::wstring& sandboxPath)
+{
+    std::wstring line = cmd;
+    if (!line.empty() && line.back() != L' ')
+        line += L' ';
+    line += L"\"" + sandboxPath + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, &line[0], nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;   // 启动失败 = 检查不通过（拒绝）
+    const bool ok = WaitForSingleObject(pi.hProcess, 15000) == WAIT_OBJECT_0;
+    DWORD code = 1;
+    if (ok)
+        GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return ok && code == 0;   // 超时 = 拒绝（不杀进程，RunBoxTriggers 同款）
+}
+
+SbieStatus RecoveryManager::CopyEx(const std::vector<std::wstring>& sandboxPaths,
+                                   const std::wstring& toDir, bool overwrite,
+                                   const RecoverCopyOptions& opts,
+                                   RecoverCopyOutcome* out)
+{
     if (out)
         *out = RecoverCopyOutcome{};
     if (box_.fileRoot.empty())
@@ -306,6 +344,11 @@ SbieStatus RecoveryManager::Copy(const std::vector<std::wstring>& sandboxPaths,
 
     std::wstring root = box_.fileRoot;
     TrimTrailingBackslash(&root);
+
+    // 检查器命令集（一次读出；键不存在 = 空集 = 无校验）
+    std::vector<std::wstring> checkers;
+    if (opts.runCheckers)
+        checkers = ConfigStore().GetList(box_.name, L"OnFileRecovery");
 
     for (const std::wstring& src : sandboxPaths) {
         std::wstring rel;
@@ -315,6 +358,27 @@ SbieStatus RecoveryManager::Copy(const std::vector<std::wstring>& sandboxPaths,
         const DWORD at = GetFileAttributesW(src.c_str());
         if (at == INVALID_FILE_ATTRIBUTES || (at & FILE_ATTRIBUTE_DIRECTORY))
             return FailCopy(out, SbieStatus::NOT_FOUND, src, 0);
+
+        // 恢复前校验（07-P1-3）：任一检查器非零 = 拒绝该文件（跳过、列出）
+        if (!checkers.empty()) {
+            bool rejected = false;
+            for (const std::wstring& raw : checkers) {
+                const std::wstring cmd = ExpandSandboxVar(raw, box_.name);
+                if (cmd.empty())
+                    continue;
+                if (!RunFileChecker(cmd, src)) {
+                    rejected = true;
+                    break;
+                }
+            }
+            if (rejected) {
+                if (out) {
+                    ++out->skippedFiles;
+                    out->skippedPaths.push_back(src);
+                }
+                continue;
+            }
+        }
 
         std::wstring dest;
         if (!toDir.empty()) {
@@ -337,8 +401,9 @@ SbieStatus RecoveryManager::Copy(const std::vector<std::wstring>& sandboxPaths,
             return FailCopy(out, Win32ToStatus(GetLastError()), dest,
                             GetLastError());
 
-        if (out) {
-            ++out->copiedFiles;
+        // 尺寸采集在删源之前（move 后源已不存在）
+        unsigned long long szBytes = 0;
+        {
             LARGE_INTEGER sz{};
             HANDLE hf = CreateFileW(src.c_str(), FILE_READ_ATTRIBUTES,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE
@@ -347,9 +412,20 @@ SbieStatus RecoveryManager::Copy(const std::vector<std::wstring>& sandboxPaths,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hf != INVALID_HANDLE_VALUE) {
                 if (GetFileSizeEx(hf, &sz))
-                    out->copiedBytes += (unsigned long long)sz.QuadPart;
+                    szBytes = (unsigned long long)sz.QuadPart;
                 CloseHandle(hf);
             }
+        }
+
+        // 移动语义（07-P1-3）：拷贝成功后删沙箱源；失败 = 该条目失败
+        //（目标已拷出、源保留——重试安全）
+        if (opts.move && !DeleteFileW(src.c_str()))
+            return FailCopy(out, Win32ToStatus(GetLastError()), src,
+                            GetLastError());
+
+        if (out) {
+            ++out->copiedFiles;
+            out->copiedBytes += szBytes;
         }
     }
     return SbieStatus::OK;

@@ -420,4 +420,21 @@ json::JsonValue LogDumpJson(size_t lastN)
     return rows;
 }
 
+void AppendSyntheticLog(const std::wstring& text)
+{
+    LogEntry e;
+    e.msgNum = 0;   // 非驱动游标来源
+    e.msgId = 0;    // 0 = 合成条目（guardian 等 server 内部行为）
+    e.pid = 0;
+    e.time = LocalTimeText();
+    e.text = text;
+    {
+        std::lock_guard<std::mutex> lk(RingMtx());
+        Ring().push_back(e);
+        while (Ring().size() > kRingMax)
+            Ring().pop_front();
+    }
+    PushToSubscribers(e);
+}
+
 } // namespace sbie::server
