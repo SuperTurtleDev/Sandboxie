@@ -22,7 +22,7 @@ SbieSvc / SbieDrv
 ```
 
 目录：`SandboxieOSS/sbie-gui/`（源码）；`SandboxieOSS/build_gui.bat`（构建+发布）；
-发布布局 `Installer/SbiePlus_x64/sbie-gui/`（235 文件 ≈139 MB，含 self-contained
+发布布局 `Installer/SbieOSS_x64/sbie-gui/`（235 文件 ≈139 MB，含 self-contained
 Windows App SDK；双击 sbie-gui.exe 即用，仅依赖 .NET 8 Desktop Runtime）。
 
 ## 2. unpackaged 启动链（官方做法核实）
@@ -48,8 +48,8 @@ Windows App SDK；双击 sbie-gui.exe 即用，仅依赖 .NET 8 Desktop Runtime�
 （proc start 90 s），超时/取消杀整棵进程树；stdout 恒 UTF-8 解码；空输出/坏 JSON
 降级为带 stderr 摘要的异常——**UI 层只显示 message，不崩溃**。
 
-定位顺序：exe 目录及各级祖先 `sbie-cli.exe` → 祖先 `Installer\SbiePlus_x64\sbie-cli.exe`
-（同时覆盖发布布局与仓库开发布局）。
+定位顺序：exe 目录及各级祖先 `sbie-cli.exe` → 祖先 `Installer\SbieOSS_x64\sbie-cli.exe`
+（同时覆盖发布布局与仓库开发布局；统一构建前为 SbiePlus_x64，2026-09-27 同步）。
 
 ### 3.1 GUI 用到的 CLI 命令（契约快照，2026-09-27 实测）
 
@@ -128,11 +128,14 @@ taskmgr 视觉规范执行：每页=页首大标题（Subtitle 样式）+右上�
 SandboxieOSS\build_gui.bat
   1) dotnet restore（失败自动以 https://api.nuget.org/v3/index.json 重试）
   2) dotnet build -c Release          （0 error 0 warning）
-  3) dotnet publish -r win-x64 --self-contained false -o ..\..\Installer\SbiePlus_x64\sbie-gui
+  3) dotnet publish -r win-x64 --self-contained false -o ..\..\Installer\SbieOSS_x64\sbie-gui
 ```
 
 产物即双击可运行；首次构建约 1.5 min（NuGet 还原 WinAppSDK 为主）。
-注意：`.bat` 必须 CRLF（本仓库交付版已转，见 §7 坑 9）。GUI 下一波再入 dist。
+日常由 `build_all.bat` 第 [7] 步统一调用（05-build.md §4）；单独运行要求
+统一布局目录已存在（脚本自建）。
+注意：`.bat` 必须 CRLF 且纯 ASCII（cmd 按 OEM 代码页解析；build_gui.bat
+注释已全转英文，见 05-build.md §6 坑 5/9）。GUI 下一波再入 dist。
 
 ## 6. 验收记录（2026-09-27，本机实跑）
 

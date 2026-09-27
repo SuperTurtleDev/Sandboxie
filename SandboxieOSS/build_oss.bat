@@ -4,7 +4,9 @@ REM ============================================================
 REM  Sandboxie-OSS (sbie-cli) standalone build - x64
 REM  Spec: docs/05-build.md section 3 (ASCII only: cmd.exe
 REM  parses batch files in the OEM code page)
-REM  Output: ..\Installer\SbiePlus_x64\sbie-cli.exe
+REM  Output: ..\Installer\SbieOSS_x64\sbie-cli.exe
+REM  (normally produced by build_all.bat; can also run standalone
+REM  after build_all.bat has assembled the layout once)
 REM ============================================================
 cd /d "%~dp0"
 set "REPO=%CD%\.."
@@ -29,14 +31,11 @@ if errorlevel 1 goto :fail
 
 REM --- 2. merge output into install layout ---
 echo [2/2] Copying output
-if not exist "%REPO%\Installer\SbiePlus_x64\" (
-    echo [ERROR] %REPO%\Installer\SbiePlus_x64 missing - run root build.bat first.
-    goto :fail
-)
-copy /y x64\Release\sbie-cli.exe "%REPO%\Installer\SbiePlus_x64\sbie-cli.exe"
+if not exist "%REPO%\Installer\SbieOSS_x64\" mkdir "%REPO%\Installer\SbieOSS_x64" || goto :fail
+copy /y x64\Release\sbie-cli.exe "%REPO%\Installer\SbieOSS_x64\sbie-cli.exe"
 if errorlevel 1 goto :fail
 
-echo BUILD SUCCEEDED: %REPO%\Installer\SbiePlus_x64\sbie-cli.exe
+echo BUILD SUCCEEDED: %REPO%\Installer\SbieOSS_x64\sbie-cli.exe
 REM Optional next step (not run automatically - see docs/05-build.md section 8):
 REM   cmd /c make_dist.bat --verify   - assemble + zip dist\Sandboxie-OSS-x64
 exit /b 0

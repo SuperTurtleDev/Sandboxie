@@ -3,14 +3,17 @@ setlocal EnableExtensions
 REM ============================================================
 REM  Sandboxie-OSS dist packaging - x64
 REM
-REM  Prereq: 1) root build.bat produced the install layout
-REM             ..\Installer\SbiePlus_x64\
-REM          2) build_oss.bat produced sbie-cli.exe there.
+REM  Prereq: build_all.bat produced the unified layout
+REM             ..\Installer\SbieOSS_x64\
+REM          (core runtime + sbie-cli.exe + sbie-gui\)
 REM  Output: dist\Sandboxie-OSS-x64\        staged tree
 REM          dist\Sandboxie-OSS-x64.zip     the archive
 REM  Usage:  make_dist.bat [--verify]
 REM          --verify  also extract the zip to dist\_verify and
-REM                    run the extracted sbie-cli.exe standalone.
+REM                    run the extracted sbie-cli.exe standalone;
+REM                    driver cat/signature, if present, are
+REM                    REPORTED but never gate the build (signing
+REM                    is decoupled - docs/05-build.md section 5).
 REM
 REM  Core runtime selection criteria (verified 2026-09-27,
 REM  dumpbin /dependents + source audit, details in
@@ -31,10 +34,11 @@ REM    - 32\SbieDll.dll + 32\SbieSvc.exe = WOW64 pair for
 REM      sandboxing 32-bit apps.
 REM    - VC runtime trio included so the dist runs on machines
 REM      without the VC++ 2015-2022 redist installed.
-REM    - driver triple taken from layout\driver\ where the
-REM      signed .cat matches that exact SbieDrv.sys build
-REM      (the layout-root SbieDrv.sys is a different, test-
-REM      signed build - do NOT mix).
+REM    - driver\ is copied AS-IS from the unified layout: the
+REM      WDK build output (sys + inf; cat only if the build
+REM      emitted one - a stock WDK build does not). No signing
+REM      assertion; kernel-signing pairs sys+cat from the
+REM      KernelSigner manual archive as a separate process.
 REM    - EXCLUDED (Plus-specific or not needed by sbie-cli):
 REM      SandMan.exe, Qt6*.dll, QSbieAPI.dll, MiscHelpers.dll,
 REM      UGlobalHotkey.dll, qtsingleapp.dll, platforms\, styles\,
@@ -43,6 +47,8 @@ REM      SbieCtrl.exe, SboxHostDll.dll, SbieIni.exe (sbie-cli
 REM      has its own cfg group), Start.exe (sbie-cli proc start
 REM      launches through SbieDll itself), SandboxieWUAU/BITS/
 REM      Crypto (opt-in sandboxed-service stubs), pdb files.
+REM      sbie-gui\ (the OSS GUI ships from the layout, not the
+REM      minimal dist - see docs/09-gui.md).
 REM    - No "msgs" text directory exists in the layout: message
 REM      text ships compiled inside SbieMsg.dll (resource-only
 REM      DLL built from Sandboxie\msgs\msgs.mc).
@@ -52,7 +58,7 @@ REM ============================================================
 cd /d "%~dp0"
 set "OSSDIR=%CD%"
 set "REPO=%CD%\.."
-set "LAYOUT=%REPO%\Installer\SbiePlus_x64"
+set "LAYOUT=%REPO%\Installer\SbieOSS_x64"
 set "DISTROOT=%OSSDIR%\dist"
 set "DIST_NAME=Sandboxie-OSS-x64"
 set "STAGE=%DISTROOT%\%DIST_NAME%"
@@ -62,18 +68,20 @@ if /i "%~1"=="--verify" set "VERIFY=1"
 
 REM --- 0. prerequisites: layout + every input file verified ---
 if not exist "%LAYOUT%\" (
-    echo [ERROR] %LAYOUT% missing - run root build.bat first.
+    echo [ERROR] %LAYOUT% missing - run build_all.bat first.
     goto :fail
 )
 if not exist "%LAYOUT%\sbie-cli.exe" (
-    echo [ERROR] %LAYOUT%\sbie-cli.exe missing - run build_oss.bat first.
+    echo [ERROR] %LAYOUT%\sbie-cli.exe missing - run build_all.bat first.
     goto :fail
 )
 
 REM root files copied flat into the dist root
 set "ROOT_FILES=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
-REM signed driver triple from layout\driver\
-set "DRV_FILES=SbieDrv.sys SbieDrv.cat SbieDrv.inf"
+REM driver: sys+inf required, copied as-is from layout\driver\
+REM (any further files in layout\driver\ - e.g. a build-emitted
+REM cat - are copied along as-is; none are hard-required)
+set "DRV_FILES=SbieDrv.sys SbieDrv.inf"
 REM WOW64 pair from layout\32\
 set "WOW_FILES=SbieDll.dll SbieSvc.exe"
 
@@ -96,7 +104,8 @@ if exist "%STAGE%" ( echo [ERROR] cannot clean stale %STAGE% & goto :fail )
 mkdir "%STAGE%\driver" "%STAGE%\32" "%STAGE%\docs" || goto :fail
 
 for %%f in (%ROOT_FILES%) do copy /y "%LAYOUT%\%%f"        "%STAGE%\%%f"        >nul || goto :fail
-for %%f in (%DRV_FILES%) do copy /y "%LAYOUT%\driver\%%f"  "%STAGE%\driver\%%f" >nul || goto :fail
+REM driver\ directory copied AS-IS (sys+inf required, extra files along)
+for /f "delims=" %%f in ('dir /b "%LAYOUT%\driver"') do copy /y "%LAYOUT%\driver\%%f" "%STAGE%\driver\%%f" >nul || goto :fail
 for %%f in (%WOW_FILES%) do copy /y "%LAYOUT%\32\%%f"      "%STAGE%\32\%%f"     >nul || goto :fail
 copy /y "%REPO%\LICENSE.Classic"        "%STAGE%\LICENSE-OSS"     >nul || goto :fail
 copy /y "%OSSDIR%\thirdparty\README.md" "%STAGE%\THIRD-PARTY.md"  >nul || goto :fail
@@ -122,9 +131,9 @@ for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "Get-Date -For
 
 >  "%STAGE%\VERSION.txt" echo Sandboxie-OSS dist %DIST_NAME%
 >> "%STAGE%\VERSION.txt" echo sbie-cli version : %CLI_VER%
->> "%STAGE%\VERSION.txt" echo SbieDrv version  : %DRV_VER%  - signed triple from Installer\SbiePlus_x64\driver
+>> "%STAGE%\VERSION.txt" echo SbieDrv version  : %DRV_VER%  - WDK build output, as-is (signing decoupled)
 >> "%STAGE%\VERSION.txt" echo build date       : %BUILD_DATE%
->> "%STAGE%\VERSION.txt" echo layout source    : Installer\SbiePlus_x64 after root build.bat + build_oss.bat
+>> "%STAGE%\VERSION.txt" echo layout source    : Installer\SbieOSS_x64 after build_all.bat
 
 REM --- 3. zip + manifest ---
 echo [3/4] Creating %ZIP%
@@ -162,6 +171,13 @@ if errorlevel 1 (
     echo [ERROR] extracted sbie-cli.exe failed to run
     goto :fail
 )
+
+REM driver cat / signature status: REPORT ONLY, never a gate.
+REM A stock WDK build emits no cat and a test-signed sys - that is
+REM expected here. Kernel-signing (KernelSigner manual archive,
+REM sys+cat pairing) is a separate follow-up process.
+powershell -NoProfile -Command "$d='%VDIR%\%DIST_NAME%\driver'; if (Test-Path (Join-Path $d 'SbieDrv.cat')) { Get-ChildItem -LiteralPath $d -File | ForEach-Object { $s = Get-AuthenticodeSignature -LiteralPath $_.FullName; 'driver report : {0} -> {1} (informational, not a gate)' -f $_.Name, $s.Status } } else { 'driver report : no cat present - WDK build output as-is, signing decoupled' }"
+
 echo VERIFY OK: zip extracts; extracted sbie-cli.exe runs and resolves
 echo               SbieDll.dll from its own directory.
 echo DIST SUCCEEDED: %ZIP%

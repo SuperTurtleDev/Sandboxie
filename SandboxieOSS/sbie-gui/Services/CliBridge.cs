@@ -60,8 +60,8 @@ public sealed class CliBridge
     /// <summary>
     /// 定位 sbie-cli.exe。顺序：
     ///   1) 本程序目录及各级祖先目录下的 sbie-cli.exe
-    ///      （发布布局：SbiePlus_x64\sbie-gui\sbie-gui.exe -> 上一级即 SbiePlus_x64\sbie-cli.exe）
-    ///   2) 各级祖先目录下 Installer\SbiePlus_x64\sbie-cli.exe（仓库开发布局）
+    ///      （发布布局：SbieOSS_x64\sbie-gui\sbie-gui.exe -> 上一级即 SbieOSS_x64\sbie-cli.exe）
+    ///   2) 各级祖先目录下 Installer\SbieOSS_x64\sbie-cli.exe（仓库开发布局）
     /// </summary>
     public static string? LocateCli()
     {
@@ -72,7 +72,7 @@ public sealed class CliBridge
             if (File.Exists(direct))
                 return direct;
 
-            string installer = Path.Combine(dir, "Installer", "SbiePlus_x64", "sbie-cli.exe");
+            string installer = Path.Combine(dir, "Installer", "SbieOSS_x64", "sbie-cli.exe");
             if (File.Exists(installer))
                 return installer;
 
