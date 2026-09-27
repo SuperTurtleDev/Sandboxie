@@ -66,6 +66,14 @@ constexpr const char* kOpProcKill   = "proc.kill";
 constexpr const char* kOpProcKillAll= "proc.killAll";
 constexpr const char* kOpProcSuspend  = "proc.suspend";
 constexpr const char* kOpProcResume   = "proc.resume";
+// 波次 E（08-P2-4/5，docs/04 §22）：D3 自注待办收口——
+//   * proc.suspendBox / proc.resumeBox：params {box?}（box 空 = 全局，对齐
+//     proc.killAll 的 P1-3 全局形）；
+//   * box.snap.default：读形态 params {name} / 写形态 {name, id | clear:true}
+//     （client box snapshot default 的 IPC 化，族内路径统一）。
+constexpr const char* kOpProcSuspendBox = "proc.suspendBox";
+constexpr const char* kOpProcResumeBox  = "proc.resumeBox";
+constexpr const char* kOpBoxSnapDefault = "box.snap.default";
 constexpr const char* kOpCfgGet     = "cfg.get";
 constexpr const char* kOpCfgSet     = "cfg.set";
 constexpr const char* kOpCfgUnset   = "cfg.unset";

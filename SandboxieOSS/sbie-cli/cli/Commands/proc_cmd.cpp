@@ -16,6 +16,8 @@
 #include "IpcRoute.h"
 #include "../../ipcc/SbieIpc.h"
 
+#include "Model/Boxes.h"
+#include "Model/ConfigStore.h"
 #include "Model/Processes.h"
 
 #include <windows.h>
@@ -278,9 +280,23 @@ int CmdProcKill(const CommandContext& ctx)
 // ---------------------------------------------------------------------------
 // sbie proc kill-all <box>（P0-1；04 §4.4：按沙箱终止全部进程）
 // sbie proc kill-all --all（P1-3：全局形态，无 box）= EnumBoxes 循环 KillBox
+// sbie proc kill-all --all [--no-exceptions]（08-P1-1）：全局形态按 box 读
+//   ExcludeFromTerminateAll（默认 n）跳过；--no-exceptions 对齐 QSbieAPI
+//   TerminateAll(bool bNoExceptions)（SbieAPI.cpp:1786-1792）的逃生旗标。
+//   语义决策：按 box 的单箱 kill-all 不检查该键——QSbieAPI 单箱形
+//   TerminateAll(const QString&) 亦不查（SbieAPI.cpp:1764-1777）。
 // Model KillBox → SbieSvc MSGID_PROCESS_KILL_ALL；计数 = 请求时该 box 的
 // 进程数（EnumBoxProcesses）；全局计数 = 各 box 请求时计数之和
 // ---------------------------------------------------------------------------
+
+// box 节自身 ExcludeFromTerminateAll=y？（QSbieAPI pBox->GetBool 同键面；
+// noExpand/noTemplates = 只读 box 节自身值）
+bool ExcludedFromTerminateAll(const std::wstring& box)
+{
+    const auto v = model::ConfigStore().Get(box, L"ExcludeFromTerminateAll",
+                                             0, true, true);
+    return v.has_value() && !_wcsicmp(v->c_str(), L"y");
+}
 
 int CmdProcKillAll(const CommandContext& ctx)
 {
@@ -289,24 +305,32 @@ int CmdProcKillAll(const CommandContext& ctx)
 
     std::vector<std::wstring> pos = boxproc::Positional(ctx.args);
     const bool globalAll = boxproc::HasFlag(ctx.args, L"--all");
+    const bool noExceptions = boxproc::HasFlag(ctx.args, L"--no-exceptions");
     if (pos.empty() && !globalAll)
         return EmitError(ctx.opts, SbieStatus::USAGE,
                          L"usage: sbie-cli proc kill-all <box>"
-                         L" | proc kill-all --all");
+                         L" | proc kill-all --all [--no-exceptions]");
     if (!pos.empty() && globalAll)
         return EmitError(ctx.opts, SbieStatus::USAGE,
                          L"--all takes no box argument");
+    if (noExceptions && !globalAll)
+        return EmitError(ctx.opts, SbieStatus::USAGE,
+                         L"--no-exceptions only applies to --all");
     const std::wstring box = pos.empty() ? std::wstring() : pos[0];
 
-    // 写路径（非幂等，retry=false；proc.killAll——box 可空 = 全局，P1-3）
+    // 写路径（非幂等，retry=false；proc.killAll——box 可空 = 全局，P1-3；
+    // no_exceptions = 08-P1-1 全局形态的逃生旗标，仅 box 空时有意义）
     {
         json::JsonValue params = json::JsonValue::Object();
         if (!box.empty())
             ipcroute::PSet(&params, L"box", box);
+        if (noExceptions)
+            ipcroute::PSet(&params, L"no_exceptions", true);
         ipcroute::Result r = ipcroute::Invoke(
             ctx.opts, ipc::kOpProcKillAll, params, false,
             [](const GlobalOptions& o, const json::JsonValue& data) {
-                // data = {count, boxes, message}（server 已按请求时进程计数）
+                // data = {count, boxes, skipped, message}（server 已按请求时
+                // 进程计数；skipped = 08-P1-1 全局形态跳过的 box 数）
                 if (o.json) {
                     EmitJsonOk(o, data);
                     return 0;
@@ -323,8 +347,10 @@ int CmdProcKillAll(const CommandContext& ctx)
             return r.exitCode;
     }
 
-    // 直连降级：目标 box 集（全局 = 启用中的全部 box）
+    // 直连降级：目标 box 集（全局 = 启用中的全部 box，ExcludeFromTerminateAll
+    // =y 者跳过——除非 --no-exceptions；08-P1-1）
     std::vector<std::wstring> targets;
+    size_t skipped = 0;
     if (!box.empty()) {
         model::BoxRepository repo(nullptr, svc::SvcClient::Instance());
         model::BoxInfo bi;
@@ -335,8 +361,13 @@ int CmdProcKillAll(const CommandContext& ctx)
         targets.push_back(box);
     } else {
         model::BoxRepository repo(nullptr, svc::SvcClient::Instance());
-        for (const model::BoxInfo& bi : repo.EnumBoxes(false))
+        for (const model::BoxInfo& bi : repo.EnumBoxes(false)) {
+            if (!noExceptions && ExcludedFromTerminateAll(bi.name)) {
+                ++skipped;
+                continue;
+            }
             targets.push_back(bi.name);
+        }
     }
 
     size_t total = 0;
@@ -355,11 +386,18 @@ int CmdProcKillAll(const CommandContext& ctx)
     const std::wstring msg = std::to_wstring(total)
         + L" process(es) terminated"
         + (box.empty() ? L" (" + std::to_wstring(targets.size())
-                             + L" box(es))" : std::wstring());
+                         + L" box(es))"
+                         + (skipped ? L", " + std::to_wstring(skipped)
+                                      + L" box(es) skipped"
+                                      L" (ExcludeFromTerminateAll)"
+                                    : std::wstring())
+                       : std::wstring());
     if (ctx.opts.json) {
         json::JsonValue d = json::JsonValue::Object();
         d.set(L"count", json::JsonValue((long long)total));
         d.set(L"boxes", json::JsonValue((long long)targets.size()));
+        if (box.empty())
+            d.set(L"skipped", json::JsonValue((long long)skipped));
         d.set(L"message", json::JsonValue(msg));
         EmitJsonOk(ctx.opts, d);
     } else {

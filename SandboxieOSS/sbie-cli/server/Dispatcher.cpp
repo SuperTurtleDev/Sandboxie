@@ -13,6 +13,7 @@
 #include "SvcProxy.h"
 #include "TracePump.h"
 #include "../ipcc/SbieIpc.h"
+#include "../ipcc/TmplHide.h"
 #include "../../SbieCore/DriverApi/DriverApi.h"
 #include "../../SbieCore/Model/Boxes.h"
 #include "../../SbieCore/Model/BoxTransfer.h"
@@ -1114,6 +1115,62 @@ OpResult HBoxSnapSetInfo(const json::JsonValue& params,
     return OpResult::Succeed(std::move(data));
 }
 
+// box.snap.default（波次 E，08-P2-5）：读形态 params {name} →
+// {box, current, default}；写形态 {name, id} 或 {name, clear:true} →
+// {box, default, message}。写经 Model SnapshotManager::SetDefault
+//（Load→改→Save 整文件 UTF-8 无 BOM，非 ASCII 快照名安全）。
+OpResult HBoxSnapDefault(const json::JsonValue& params,
+                         const std::shared_ptr<Connection>&)
+{
+    std::wstring name;
+    if (!GetStr(params, L"name", &name) || name.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
+    std::wstring id;
+    GetStr(params, L"id", &id);
+    const bool clear = GetBool(params, L"clear", false);
+    if (!id.empty() && clear)
+        return OpResult::Fail(SbieStatus::USAGE,
+                              L"'id' and 'clear' are mutually exclusive");
+
+    model::SnapshotManager sm(model::BoxInfo{});
+    SbieStatus st = MakeSnapMgr(name, &sm);
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"box '" + name + L"' not found");
+
+    std::wstring currentId, defaultId;
+    std::vector<model::SnapshotInfo> snaps = sm.List(&currentId, &defaultId);
+
+    if (id.empty() && !clear) {
+        // 读形态（client 直连同款：current/default 两行 + 快照名）
+        json::JsonValue data = json::JsonValue::Object();
+        data.set(L"box", json::JsonValue(name));
+        data.set(L"current", json::JsonValue(currentId));
+        data.set(L"default", json::JsonValue(defaultId));
+        return OpResult::Succeed(std::move(data));
+    }
+
+    if (!clear) {
+        bool hit = false;
+        for (const auto& s : snaps)
+            if (_wcsicmp(s.id.c_str(), id.c_str()) == 0)
+                hit = true;
+        if (!hit)
+            return OpResult::Fail(SbieStatus::NOT_FOUND,
+                                  L"snapshot not found: " + id);
+    }
+    st = sm.SetDefault(clear ? std::wstring() : id);
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"failed to write Snapshots.ini [Current]"
+                                  L" Default");
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"box", json::JsonValue(name));
+    data.set(L"default", json::JsonValue(clear ? L"" : id));
+    data.set(L"message",
+             json::JsonValue(clear ? L"default snapshot marker cleared"
+                                   : L"default snapshot set to " + id));
+    return OpResult::Succeed(std::move(data));
+}
+
 OpResult HProcStart(const json::JsonValue& params,
                     const std::shared_ptr<Connection>&)
 {
@@ -1230,6 +1287,150 @@ OpResult HCfgSet(const json::JsonValue& params,
     return OpResult::Succeed(std::move(data));
 }
 
+// tpl.*（波次 E，06 §5 遗留收口）。注意 TemplateRegistry 的 List/Info 都可能
+// 内部触 SbieSvc（FindSandboxieIni→IniGetPath）——按 03 §1 线程亲和，凡触
+// svc::SvcClient 的工作一律经 SvcCall 专职线程（实测坑：worker 线程直调
+// LPC 端口会挂起，见 docs/04 §22.4）。
+OpResult HTplList(const json::JsonValue& params,
+                  const std::shared_ptr<Connection>&)
+{
+    std::wstring clazz = L"*";
+    GetStr(params, L"class", &clazz);   // 可选：L"*" = 全部
+    const bool all = GetBool(params, L"all", false);   // 08-P2-7 --all
+    std::vector<model::TemplateInfo> list;
+    std::wstring iniPath;   // Sandboxie.ini 权威路径（Tmpl.Hide 本地节扫描用）
+    SbieStatus st = SvcCall([&] {
+        model::TemplateRegistry treg(nullptr, svc::SvcClient::Instance());
+        list = treg.List(clazz);
+        bool isHome = false;
+        svc::SvcClient::Instance().IniGetPath(&iniPath, &isHome);  // 尽力而为
+        return SbieStatus::OK;
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"template list");
+    // 08-P2-7：默认滤 Tmpl.Hide=y（ipcc/TmplHide；Sandboxie.ini 路径已在
+    // SvcCall 内取得——助手在 worker 线程不得自行触 SbieSvc，§22.4）
+    const std::vector<std::wstring> hidden =
+        all ? std::vector<std::wstring>() : tmplhide::HiddenNames(iniPath);
+    json::JsonValue rows = json::JsonValue::Array();
+    for (const model::TemplateInfo& ti : list) {
+        if (tmplhide::Contains(hidden, ti.name))
+            continue;
+        json::JsonValue r = json::JsonValue::Object();
+        r.set(L"name", json::JsonValue(ti.name));
+        // 空 class 不置键（CellOf 缺键 → "-"，与 client 直连的呈现对齐）
+        if (!ti.clazz.empty())
+            r.set(L"class", json::JsonValue(ti.clazz));
+        r.set(L"description", json::JsonValue(ti.descr));
+        rows.pushBack(std::move(r));
+    }
+    return OpResult::Succeed(std::move(rows));
+}
+
+OpResult HTplInfo(const json::JsonValue& params,
+                  const std::shared_ptr<Connection>&)
+{
+    std::wstring name;
+    if (!GetStr(params, L"name", &name) || name.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'name'");
+    model::TemplateRegistry treg(nullptr, svc::SvcClient::Instance());
+    std::vector<std::pair<std::wstring, std::wstring>> settings;
+    // Info 内部含 IniGetPath（SbieSvc LPC）→ SvcProxy 专职线程（03 §1）
+    SbieStatus st = SvcCall([&] { return treg.Info(name, &settings); });
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"template not found: " + name);
+    json::JsonValue arr = json::JsonValue::Array();
+    for (const auto& kv : settings) {
+        json::JsonValue r = json::JsonValue::Object();
+        r.set(L"key", json::JsonValue(kv.first));
+        r.set(L"value", json::JsonValue(kv.second));
+        arr.pushBack(std::move(r));
+    }
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"name", json::JsonValue(name));
+    data.set(L"settings", std::move(arr));
+    return OpResult::Succeed(std::move(data));
+}
+
+// tpl.check（波次 E，06 §5 遗留收口）：与 client 直连同构——盘上
+// Sandboxie.ini 三节（box / DefaultTemplates / GlobalSettings）的 Template=
+// 值分档对照，known = TemplateRegistry 全目录命中。来源分档必须读盘上 ini
+// （驱动缓存查询带 GlobalSettings 回退，不能用于分档）。svc 面（IniGetPath
+// + List 的内部 IniGetPath）合并进单个 SvcCall（03 §1 线程亲和）；盘上节
+// 读（GetPrivateProfileSectionW）为纯文件 IO，留在 worker 线程。
+OpResult HTplCheck(const json::JsonValue& params,
+                   const std::shared_ptr<Connection>&)
+{
+    std::wstring box;
+    if (!GetStr(params, L"box", &box) || box.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"missing param 'box'");
+    bool enabled = false, exists = false;
+    if (drv::IsBoxEnabled(box, &enabled, &exists) != SbieStatus::OK || !exists)
+        return OpResult::Fail(SbieStatus::NOT_FOUND,
+                              L"box not found: " + box);
+
+    std::wstring iniPath;
+    std::vector<model::TemplateInfo> catalog;
+    SbieStatus st = SvcCall([&] {
+        bool isHome = false;
+        SbieStatus s = svc::SvcClient::Instance().IniGetPath(&iniPath,
+                                                             &isHome);
+        if (s != SbieStatus::OK)
+            return s;
+        model::TemplateRegistry treg(nullptr, svc::SvcClient::Instance());
+        catalog = treg.List(L"*");
+        return SbieStatus::OK;
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"template check");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"template check requires SbieSvc to locate"
+                                  L" Sandboxie.ini");
+    auto known = [&catalog](const std::wstring& n) {
+        for (const auto& ti : catalog)
+            if (_wcsicmp(ti.name.c_str(), n.c_str()) == 0)
+                return true;
+        return false;
+    };
+
+    struct Row { std::wstring tmpl, source; bool exists; };
+    std::vector<Row> rows;
+    auto collect = [&](const wchar_t* section, const wchar_t* source) {
+        std::vector<wchar_t> buf(32768);
+        DWORD n = GetPrivateProfileSectionW(section, buf.data(),
+                                            (DWORD)buf.size(), iniPath.c_str());
+        for (DWORD p = 0; p < n;) {
+            std::wstring kv = buf.data() + p;
+            p += (DWORD)kv.size() + 1;
+            const std::wstring kEq = L"Template=";
+            if (_wcsnicmp(kv.c_str(), kEq.c_str(), kEq.size()) != 0)
+                continue;
+            std::wstring v = kv.substr(kEq.size());
+            if (v.empty())
+                continue;
+            bool dup = false;
+            for (const auto& r : rows)
+                if (_wcsicmp(r.tmpl.c_str(), v.c_str()) == 0)
+                    dup = true;   // 先入档优先（box config > Default > Global）
+            if (!dup)
+                rows.push_back({ v, source, known(v) });
+        }
+    };
+    collect(box.c_str(), L"config");
+    collect(L"DefaultTemplates", L"DefaultTemplates");
+    collect(L"GlobalSettings", L"GlobalSettings");
+
+    json::JsonValue jrows = json::JsonValue::Array();
+    for (const auto& r : rows) {
+        json::JsonValue j = json::JsonValue::Object();
+        j.set(L"template", json::JsonValue(r.tmpl));
+        j.set(L"source", json::JsonValue(r.source));
+        j.set(L"exists", json::JsonValue(r.exists));
+        jrows.pushBack(std::move(j));
+    }
+    return OpResult::Succeed(std::move(jrows));
+}
+
 OpResult HTplApply(const json::JsonValue& params,
                    const std::shared_ptr<Connection>&)
 {
@@ -1325,17 +1526,23 @@ OpResult HTplRevoke(const json::JsonValue& params,
 // ---------------------------------------------------------------------------
 
 // proc.killAll（P0-1；P1-3 参数化 box 可空 = 全局）：
-//   * box 给定 —— 计数 = 请求时该 box 进程数，KillBox；
+//   * box 给定 —— 计数 = 请求时该 box 进程数，KillBox（不查
+//     ExcludeFromTerminateAll——QSbieAPI 单箱 TerminateAll 亦不查，
+//     SbieAPI.cpp:1764-1777）；
 //   * box 空（`proc kill-all --all`）—— EnumBoxes 循环 KillBox（仅启用 box；
 //     进程只可能运行于启用 box，与 box.list 缺省口径一致），计数 = 各 box
-//     请求时进程数之和。
+//     请求时进程数之和；ExcludeFromTerminateAll=y 的 box 跳过，除非
+//     no_exceptions（08-P1-1，对齐 QSbieAPI TerminateAll(bNoExceptions)，
+//     SbieAPI.cpp:1786-1792）。
 OpResult HProcKillAll(const json::JsonValue& params,
                       const std::shared_ptr<Connection>&)
 {
     std::wstring box;
     GetStr(params, L"box", &box);   // 可选：空 = 全局（P1-3）
+    const bool noExceptions = GetBool(params, L"no_exceptions", false);
 
     std::vector<std::wstring> targets;
+    size_t skipped = 0;
     if (!box.empty()) {
         model::BoxInfo bi;
         SbieStatus st = GetBoxInfoSafe(box, &bi);
@@ -1347,8 +1554,17 @@ OpResult HProcKillAll(const json::JsonValue& params,
         targets.push_back(box);
     } else {
         model::BoxRepository repo(nullptr, svc::SvcClient::Instance());
-        for (const model::BoxInfo& bi : repo.EnumBoxes(false))   // 启用中的 box
+        for (const model::BoxInfo& bi : repo.EnumBoxes(false)) {   // 启用中的 box
+            if (!noExceptions) {
+                const auto v = model::ConfigStore().Get(
+                    bi.name, L"ExcludeFromTerminateAll", 0, true, true);
+                if (v.has_value() && !_wcsicmp(v->c_str(), L"y")) {
+                    ++skipped;   // 08-P1-1：全局终止的荣誉键
+                    continue;
+                }
+            }
             targets.push_back(bi.name);
+        }
     }
 
     size_t total = 0;
@@ -1371,12 +1587,20 @@ OpResult HProcKillAll(const json::JsonValue& params,
     json::JsonValue data = json::JsonValue::Object();
     data.set(L"count", json::JsonValue((long long)total));
     data.set(L"boxes", json::JsonValue((long long)targets.size()));
+    data.set(L"skipped", json::JsonValue((long long)skipped));
     data.set(L"message",
              json::JsonValue(std::to_wstring(total)
                              + L" process(es) terminated"
                              + (box.empty()
                                     ? L" (" + std::to_wstring(targets.size())
                                           + L" box(es))"
+                                          + (skipped
+                                                 ? L", "
+                                                       + std::to_wstring(skipped)
+                                                       + L" box(es) skipped"
+                                                         L" (ExcludeFrom"
+                                                         L"TerminateAll)"
+                                                 : std::wstring())
                                     : L"")));
     return OpResult::Succeed(std::move(data));
 }
@@ -1420,6 +1644,77 @@ OpResult HProcResume(const json::JsonValue& params,
                      const std::shared_ptr<Connection>&)
 {
     return HProcSuspendResume(params, false);
+}
+
+// proc.suspendBox / proc.resumeBox（波次 E，08-P2-4；D3 自注待办收口）：
+// params {box?}——box 空 = 全局（EnumBoxes 仅启用 box，与 killAll 全局口径
+// 一致）；触 SbieSvc 的 SuspendResumeAll 一律经 SvcCall 专职线程。data 与
+// client 直连路径同形（box/boxes/suspended/count/message）。
+OpResult HProcSuspendBoxImpl(const json::JsonValue& params, bool suspend)
+{
+    const wchar_t* verb = suspend ? L"suspend-box" : L"resume-box";
+    std::wstring box;
+    GetStr(params, L"box", &box);   // 可选：空 = 全局
+
+    std::vector<std::wstring> targets;
+    if (!box.empty()) {
+        model::BoxInfo bi;
+        SbieStatus st = GetBoxInfoSafe(box, &bi);
+        if (st == SbieStatus::NOT_FOUND)
+            return OpResult::Fail(SbieStatus::NOT_FOUND,
+                                  L"box '" + box + L"' not found");
+        if (st != SbieStatus::OK)
+            return OpResult::Fail(st, L"query failed for box: " + box);
+        targets.push_back(box);
+    } else {
+        model::BoxRepository repo(nullptr, svc::SvcClient::Instance());
+        for (const model::BoxInfo& bi : repo.EnumBoxes(false))
+            targets.push_back(bi.name);
+    }
+
+    ULONG total = 0;
+    json::JsonValue boxes = json::JsonValue::Array();
+    for (const std::wstring& b : targets) {
+        std::vector<ULONG> pids;
+        if (drv::EnumBoxProcesses(b, false, &pids) != SbieStatus::OK)
+            continue;   // 计数（失败=0，与 client 直连同款）
+        SbieStatus st = SvcCall([&b, suspend] {
+            return svc::SvcClient::Instance().SuspendResumeAll(b, suspend);
+        });
+        if (st == SbieStatus::ERR_SVC_TRANSPORT)
+            return FailSvcDown(verb);
+        if (st != SbieStatus::OK)
+            return OpResult::Fail(st,
+                                  std::wstring(verb) + L" failed for box '"
+                                      + b + L"' (SbieSvc required)");
+        total += (ULONG)pids.size();
+        boxes.pushBack(json::JsonValue(b));
+    }
+
+    json::JsonValue data = json::JsonValue::Object();
+    if (!box.empty())
+        data.set(L"box", json::JsonValue(box));
+    data.set(L"boxes", std::move(boxes));
+    data.set(L"suspended", json::JsonValue(suspend));
+    data.set(L"count", json::JsonValue((long long)total));
+    data.set(L"message",
+             json::JsonValue(std::wstring(verb) + L": "
+                             + std::to_wstring(total) + L" process(es) in "
+                             + std::to_wstring(targets.size())
+                             + L" box(es)"));
+    return OpResult::Succeed(std::move(data));
+}
+
+OpResult HProcSuspendBox(const json::JsonValue& params,
+                         const std::shared_ptr<Connection>&)
+{
+    return HProcSuspendBoxImpl(params, true);
+}
+
+OpResult HProcResumeBox(const json::JsonValue& params,
+                        const std::shared_ptr<Connection>&)
+{
+    return HProcSuspendBoxImpl(params, false);
 }
 
 // box.setEnabled（P0-3）：参数 name/enabled/password?；Enabled=y/n
@@ -2445,14 +2740,8 @@ OpResult HUsbSync(const json::JsonValue& params,
     return OpResult::Succeed(std::move(d));
 }
 
-// 未实现 op 的占位（后续波次在 RegisterBuiltinOps 换成真 handler 即可）
-OpResult Stub(const std::string& op)
-{
-    return OpResult::Fail(SbieStatus::ERR_NOT_IMPLEMENTED,
-                          util::Utf8ToWide("op '" + op
-                              + "' not implemented in this server build"
-                                " (planned wave)"));
-}
+// 未实现 op 的占位函数已在波次 E 退役（tpl 三连收口后注册面无 Stub 残留；
+// 未知 op 由 Dispatch 直接回 ERR_NOT_IMPLEMENTED）。
 
 } // namespace
 
@@ -2526,7 +2815,7 @@ void RegisterBuiltinOps()
     reg[ipc::kOpBoxExport]     = HBoxExport;
     reg[ipc::kOpBoxImport]     = HBoxImport;
 
-    // ---- 波次 D2（磁盘映像/RAM 盘/USB 沙箱运维域，docs/04 §18）----
+    // ---- D2（磁盘映像/RAM 盘/USB 沙箱运维域，docs/04 §18）----
     reg[ipc::kOpImgList]       = HImgList;
     reg[ipc::kOpImgStatus]     = HImgStatus;
     reg[ipc::kOpImgCreate]     = HImgCreate;
@@ -2536,19 +2825,18 @@ void RegisterBuiltinOps()
     reg[ipc::kOpUsbStatus]     = HUsbStatus;
     reg[ipc::kOpUsbSync]       = HUsbSync;
 
-    // ---- 未实现（规范错误码；后续波次补齐）----
-    // tpl.list/info/check：client 直连实现运行良好（audit 判降级可接受，
-    // 06 §5），补 server op 仅为路径统一
-    reg[ipc::kOpTplList]       = [](const json::JsonValue&,
-                                    const std::shared_ptr<Connection>&) {
-        return Stub(ipc::kOpTplList); };
-    reg[ipc::kOpTplInfo]       = [](const json::JsonValue&,
-                                    const std::shared_ptr<Connection>&) {
-        return Stub(ipc::kOpTplInfo); };
-    reg[ipc::kOpTplCheck]      = [](const json::JsonValue&,
-                                    const std::shared_ptr<Connection>&) {
-        return Stub(ipc::kOpTplCheck); };
-    // server.push 专用 op：不接受请求方向
+    // ---- 波次 E（第三轮审计 08 微件收口，docs/04 §22）----
+    // tpl 三连真 handler（06 §5 遗留；此前 Stub 降级直连）
+    reg[ipc::kOpTplList]       = HTplList;
+    reg[ipc::kOpTplInfo]       = HTplInfo;
+    reg[ipc::kOpTplCheck]      = HTplCheck;
+    // 08-P2-4：proc suspend-box/resume-box 的 server op（D3 自注待办）
+    reg[ipc::kOpProcSuspendBox] = HProcSuspendBox;
+    reg[ipc::kOpProcResumeBox]  = HProcResumeBox;
+    // 08-P2-5：box snapshot default 的读写两形态（族内路径统一）
+    reg[ipc::kOpBoxSnapDefault] = HBoxSnapDefault;
+
+    // ---- server.push 专用 op：不接受请求方向 ----
     reg[ipc::kOpLogEvent]      = [](const json::JsonValue&,
                                     const std::shared_ptr<Connection>&) {
         return OpResult::Fail(SbieStatus::INVALID,

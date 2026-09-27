@@ -265,8 +265,9 @@ sbie server  start|stop|status
 sbie box     list [--type <t>]|info|create [--type <t>] [--location <dir>] [--temp]|
              [--v2-delete] [--auto-recover] [--block-net] [--drop-admin]|
              delete|rename|enable|disable|set|get|list-setting|clean|size|
+             copy|export|import|types|
              dump <name>|explore <name>|recover (list|copy|add)|
-             snapshot (list|take|remove|select|set-info|info|default)
+             snapshot (list|take|remove|select|set-info|default)
 sbie proc    list|info|start|kill|kill-all (<box>|--all)|suspend|resume|
              suspend-box|resume-box (<box>|--all)|exempt <pid> <on|off|get>
 sbie cfg     get|set|unset|list-setting|reload|path|lock|unlock|whoami|dump [<section>]
@@ -281,6 +282,9 @@ sbie usb     status|sync [--dry-run]
 sbie doctor
 ```
 （D1/D3 波次命令详表：trace §20、box/proc/cfg/template/maint/doctor 增强与新命令 §19）
+【08 审计回填：本树补 box copy/export/import/types（波 B/D3，§17/§19）；原树误列的
+snapshot info 为幽灵动词——实现无此 verb（实测 `box snapshot info` → USAGE，动词集
+list/take/remove/select/set-info/default），已删。来源 docs\08 §3.1。】
 
 每命令规格如下。`--json` 时 "输出" 列的表格数据改为 §7 的 JSON 对象数组；退出码列仅列
 特异值，通用失败见 §6。所有命令共有的错误：`3`（驱动不可用，读类）、`4`（server 不可用
@@ -297,7 +301,7 @@ sbie doctor
 
 | 命令 | 参数 | 行为 | 输出 | 退出码 |
 |---|---|---|---|---|
-| `sbie server start` | `[--idle <sec>]` | 本进程派生 `--start-server`（DETACHED）；已在跑则幂等成功 | `server started (pid 1234)` | 0；4=拉起失败/超时 |
+| `sbie server start` | `[--idle-timeout <sec>]` `[--no-guardians]`（08 审计回填：原表 `--idle` 为误记，实际旗标 `--idle-timeout`，server_cmd.cpp:66；`--no-guardians` 波 A，§16） | 本进程派生 `--start-server`（DETACHED）；已在跑则幂等成功 | `server started (pid 1234)` | 0；4=拉起失败/超时 |
 | `sbie server stop` | — | 经管道发 `server.shutdown`（校验同用户） | `server stopped` | 0；5=未运行 |
 | `sbie server status` | — | 探测管道+互斥体 | running/pid/clients/idle-remaining 或 `not running` | 0（not running 也是 0，供脚本判断用输出） |
 
@@ -325,6 +329,13 @@ sbie doctor
 | `sbie box snapshot select <name> <id>` | — | `box.snap.select` | 切换当前快照 | `switched` | 0；5；9 |
 | `sbie box snapshot set-info <name> <id>` | `[--name …] [--info …]` | `box.snap.setInfo` | 改 Snapshots.ini 字段 | — | 0；5 |
 
+> 【08 审计回填注】本表为波次前基础形态；波次 A/B/D 增改以详表为准：`box create`
+> 类型预设与高级旗标（§17/§19）、`box clean`/`delete --files` 的 OnBoxDelete
+> 触发器与 `--no-triggers`（§16）、`box recover copy` 的 `--move` 与 OnFileRecovery
+> 检查器缺省执行/`--no-check`（§17——本表"拷贝语义非移动"句已由波 B 更新）、
+> `box snapshot default`（§19）、`box copy/export/import/types`（§17/§19）。
+> 来源：docs\08 §3.1 三方核对（--help/代码注册表 vs 本表）。
+
 ### 4.4 proc（进程）
 
 | 命令 | 参数 | ipc op | 语义 | 输出 | 退出码 |
@@ -333,8 +344,8 @@ sbie doctor
 | `sbie proc info <pid>` | — | `proc.info` | GetProcInfo(7)+flags | 键值行 | 0；5 |
 | `sbie proc start <box> <cmd…>` | `[--dir <d>]` `[--elevated]` `[--wait]` | `proc.start` | RunSandboxed（SbieSvc）；`--elevated` 降级走 `SbieDll_RunStartExe /elevated`；**`--dir` 缺省 = client 当前目录显式进 params**（P1-7，04 §15——两路径 cwd 语义一致） | 新 PID；`--wait` 附加退出码行 | 0；4；`--wait` 时透传子进程退出码 |
 | `sbie proc kill <pid>` | — | `proc.kill` | KillOne | `killed` | 0；5 |
-| `sbie proc kill-all <box>` | `[--all-sessions]` | `proc.killAll` | KillAll | `n process(es) terminated` | 0；5 |
-| `sbie proc kill-all --all` | — | `proc.killAll`（box 空） | EnumBoxes 循环 KillBox（P1-3，全局形态；仅启用 box——进程只可能运行于启用 box） | `n process(es) terminated (m box(es))` | 0 |
+| `sbie proc kill-all <box>` | `[--all-sessions]` | `proc.killAll` | KillAll（**不查** ExcludeFromTerminateAll——QSbieAPI 单箱 TerminateAll 亦不查，08-P1-1 语义决策） | `n process(es) terminated` | 0；5 |
+| `sbie proc kill-all --all` | `[--no-exceptions]`（08-P1-1 波 E） | `proc.killAll`（box 空，no_exceptions 透传） | EnumBoxes 循环 KillBox（P1-3，全局形态；仅启用 box——进程只可能运行于启用 box）；`ExcludeFromTerminateAll=y` 的 box 跳过（对齐 QSbieAPI TerminateAll，SbieAPI.cpp:1786-1792），`--no-exceptions` 全杀（对齐 bNoExceptions 逃生） | `n process(es) terminated (m box(es)), k box(es) skipped (ExcludeFromTerminateAll)`（无跳过时省后半） | 0 |
 | `sbie proc suspend <pid>` / `resume <pid>` | — | `proc.suspend/resume` | SuspendResume | — | 0；5 |
 
 ### 4.5 cfg（全局配置）
@@ -357,11 +368,11 @@ sbie doctor
 
 | 命令 | 参数 | ipc op | 语义 | 输出 | 退出码 |
 |---|---|---|---|---|---|
-| `sbie template list` | `[--class <c>]` | `tpl.list` | 枚举 `[Template_*]` 节 + Tmpl.Class | 表：NAME CLASS DESCRIPTION(Tmpl.Name) | 0 |
-| `sbie template info <name>` | — | `tpl.info` | 列模板节全部键值 | 键值行 | 0；5 |
+| `sbie template list` | `[--class <c>]` `[--all]`（08-P2-7 波 E） | `tpl.list`（all 透传） | 枚举 `[Template_*]` 节 + Tmpl.Class；默认滤 `Tmpl.Hide=y`（与 Plus 呈现对齐），`--all` 显示 | 表：NAME CLASS DESCRIPTION(Tmpl.Name) | 0 |
+| `sbie template info <name>` | — | `tpl.info` | 列模板节全部键值（波 E 起真 handler，不再 Stub 降级） | 键值行 | 0；5 |
 | `sbie template apply <box> <name>` | — | `tpl.apply` | box 节 Append `Template=<name>` | `applied` | 0；5=模板不存在；6 |
 | `sbie template revoke <box> <name>` | — | `tpl.revoke` | 删该值 | `revoked` | 0；5 |
-| `sbie template check <box>` | — | `tpl.check` | 列 box 已启用模板及来源 | 表：TEMPLATE SOURCE(config/DefaultTemplates) | 0；5 |
+| `sbie template check <box>` | — | `tpl.check` | 列 box 已启用模板及来源（波 E 起真 handler：盘上三节分档 + TemplateRegistry 目录对照；--json 行含 exists 字段，表形态列同前） | 表：TEMPLATE SOURCE(config/DefaultTemplates) | 0；5 |
 
 ### 4.7 log（消息日志）
 
@@ -414,9 +425,10 @@ create/mount 报 3，status 呈现 "unknown (ImDisk driver not available)"。
 D1/D3 波次（04 §19/§20）：`trace watch/dump`（订阅被拒或 --no-server 时降级
 直连自拉 API_MONITOR_GET2，§20；注意排空式读取——server 泵与直连 watch 不可
 同时读同会话环）、`box dump`、`cfg dump`、`cfg whoami`、`doctor`、`box explore`、
-`template gen-browser`（探测纯读；写走 SbieSvc）、`proc suspend-box/resume-box/
-exempt`、`maint install/uninstall`、`box snapshot default`、`box create 高级旗标`
-（SbieSvc 直连）均为可降级/恒直执形态。
+`template gen-browser`（探测纯读；写走 SbieSvc）、`proc exempt`、
+`maint install/uninstall`、`box create 高级旗标`（SbieSvc 直连）均为可降级/恒直执
+形态。波次 E（08-P2-4/5）后 `proc suspend-box/resume-box` 与 `box snapshot
+default` 已 IPC 化（§22），不再属恒直连清单。
 
 （`cfg reload` 走 SbieApi_ReloadConf 直连驱动，可降级；但它同时是 SbieSvc refresh 的一部分，
 两路径一致。`maint status/start/stop` 无 IPC op——机器级操作，client 本地恒直执。）
@@ -2077,11 +2089,13 @@ sbie box    create <name> [--location <dir>]   高级旗标（无旗标=原 IPC 
             info <name>                        +type(七类派生)/never_delete/   [box.info+本地补列]
                                                auto_delete/empty/initialized
             list [--type <t>]                  按派生类型过滤                   [本地派生过滤]
-            snapshot default <box> [<id>|--clear]  [Current] Default 读写       [无 op——文件直写]
+            snapshot default <box> [<id>|--clear]  [Current] Default 读写       [box.snap.default——
+                                                                            波 E 08-P2-5 接线]
             dump <name>                        原始节全量导出（ini 片段形态）  [无 op——驱动缓存读]
             explore <name>                     宿主 explorer 打开 FileRoot     [无 op——ShellExecute]
-sbie proc    suspend-box <box>|--all           箱级整体挂起（SvcClient          [无 op——SbieSvc 直连]
-            resume-box  <box>|--all            SuspendResumeAll 接线）
+sbie proc    suspend-box <box>|--all           箱级整体挂起/恢复              [proc.suspendBox/
+            resume-box  <box>|--all            （SuspendResumeAll）            proc.resumeBox——波 E
+                                                                            08-P2-4 接线]
             info <pid>                         +flags_decoded/image_type/       [proc.info+本地补列]
                                                elevated/wow64
             exempt <pid> <on|off|get>          API_PROCESS_EXEMPTION_CONTROL   [无 op——ioctl 直投]
@@ -2285,3 +2299,154 @@ doctor/box_d3/proc_d3/maint_d3）**代码已全部在位**且首次构建即 0 e
    02 §7 坑 4 同族含糊）——位名解码器本身正确（有位即列），基础值来源
    维持现状。
 5. **06 P2-2/P2-10**：见 §21.3 处置理由（后续独立波次）。
+
+---
+
+## 22. 验收记录（波次 E：第三轮审计 08 微件收口，2026-09-27）
+
+接手审计结论：前任因配额中断时两大 P1（08-P1-1 排除语义、08-P1-2 数组变体
+绑定）与 P2-4/5/6 + tpl 三连的**代码主体已全部在位**（client/server 两路径、
+IPC 参数、注册接线、文档回填），仅 Tmpl.Hide（08-P2-7）未动、Dispatcher 注册
+表有一处中断挤压行（两条 reg 语句并作一行，语义无损）。本波次接手：修挤压行、
+补 08-P2-7、跑通构建、全量实测、环境清理与基线还原、docs/08 状态列回填。
+
+### 22.0 改动面（波次 E 累计，含前任在位部分）
+
+| 文件 | 内容 |
+|---|---|
+| SbieCore\DriverApi\DriverApi.h/.cpp | +1 绑定 `SbieDll_FormatMessage`（数组变体，08-P1-2） |
+| SbieCore\Model\Snapshots.h/.cpp | +`SnapshotManager::SetDefault(id)`（additive；[Current] Default 整文件 Load→改→Save，UTF-8 无 BOM） |
+| sbie-cli\cli\Cli.cpp/.h | 组级 --help（PrintGroupUsage + --help 位置敏感分派，08-P2-6）；顶层 usage 增 kill-all 排除句 |
+| sbie-cli\cli\Commands\proc_cmd.cpp | kill-all --all 排除 + --no-exceptions + skipped 计数（08-P1-1 client 侧） |
+| sbie-cli\cli\Commands\proc_d3.cpp | suspend-box/resume-box IPC 化（08-P2-4 client 侧） |
+| sbie-cli\cli\Commands\box_d3.cpp | snapshot default IPC 化（08-P2-5 client 侧）；行级改写助手并入 Model |
+| sbie-cli\cli\Commands\log_cmd.cpp | FormatText 改数组变体（08-P1-2 client 侧） |
+| sbie-cli\cli\Commands\template_cmd.cpp | `--all` 旗标 + 直连路径 Tmpl.Hide 过滤（08-P2-7） |
+| sbie-cli\ipcc\SbieIpc.h | +kOpProcSuspendBox/ResumeBox、kOpBoxSnapDefault |
+| sbie-cli\ipcc\TmplHide.h/.cpp | （新增，波 E 接手部分）Tmpl.Hide=y 模板名集合助手（Templates.ini + Sandboxie.ini 本地节；client 与 server 共用） |
+| sbie-cli\server\Dispatcher.cpp | HProcKillAll 排除 + no_exceptions；HProcSuspendBox/ResumeBox；HBoxSnapDefault；HTplList/Info/Check 真实现（Stub 退役）；tpl.list all 参数 |
+| sbie-cli\server\LogPump.cpp | FormatEntryText 改数组变体（08-P1-2 server 侧） |
+| docs\04、docs\08 | 本节 + §4.2/4.3/4.6 规格行更新 + 08 状态列回填 |
+
+构建：`cmd //c build_oss.bat` 0 error（/W4/WX），产物已并入
+`Installer\SbiePlus_x64\sbie-cli.exe`。
+
+### 22.1 08-P1-1：kill-all --all 排除语义（真实驱动 + SbieSvc）
+
+前置：TestOssA 设 `ExcludeFromTerminateAll=y`（cfg set），TestOssA/B 各起
+`cmd /c "ping -n 600 …"`（A 3 进程：cmd+RpcSs+DcomLaunch；B 4 进程）。
+
+1. **IPC 全局形**：`proc kill-all --all`（transport: ipc）→
+   `4 process(es) terminated (12 box(es)), 1 box(es) skipped
+   (ExcludeFromTerminateAll)`；proc list 复核 A 的 3 进程**存活**、B 清空。
+2. **直连全局形**：`--no-server` 同样跳过（client 侧 ExcludedFromTerminateAll
+   助手，ConfigStore Get noExpand/noTemplates 只读 box 节自身）。
+3. **JSON 信封**：`{"count":0,"boxes":12,"skipped":1,"message":…}`——
+   skipped 字段仅全局形输出。
+4. **--no-exceptions 逃生**：A 补起进程后 `kill-all --all --no-exceptions` →
+   `3 process(es) terminated (13 box(es))`（无 skip 句），A 清空。
+5. **单箱形不查键**（语义决策，对齐 QSbieAPI 单箱 TerminateAll
+   SbieAPI.cpp:1764-1777）：`kill-all TestOssA` → `3 process(es) terminated`。
+6. **USAGE 守卫**：`kill-all <box> --no-exceptions` → "--no-exceptions only
+   applies to --all"；`--all` 带 box → "--all takes no box argument"；裸
+   kill-all → usage（rc 2）。
+
+### 22.2 08-P1-2：SbieDll_FormatMessage 数组变体
+
+1. **绑定**：GetProcAddress 表 +1（与 0/1/2 定参变体并列）；类型
+   `WCHAR* (CALLBACK*)(ULONG, const WCHAR**)`；约定 %N↔ins[N]、前 5 插入置
+   ins[1..5]、空槽 nullptr（support.c:830-922 对照核实，定参变体内部即
+   ins[1]=…/ins[2]=… 的包装）。
+2. **调用点**：server LogPump.cpp FormatEntryText 与 client log_cmd.cpp
+   FormatText 同构改数组（6 槽）；"%0" 类消息/无表项回退插入串直拼不变
+   （1399 实测仍走回退——按设计）。
+3. **导出级验证**（临时 harness，不入仓）：直调安装版 SbieDll.dll 导出，
+   SBIE1317（`Blocked '%2' … '%3'`，popup/inf 全码 0x41020525）传入
+   INS-A/INS-B → `SBIE1317 Blocked 'INS-A' from trying to access sandbox
+   file root 'INS-B'`——**%2+%3 双插入完整渲染**；SBIE1101（evt/inf）单插入
+   正常。
+4. **实测修正（登记进 08 §2.2 回填）**：编译入 SbieMsg.dll 的 SBIE 1xxx/2xxx
+   文案均 ≤2 插入——审计所引 %4 文案（"Failed to record…" 3311、"箱容量"
+   等）属 3xxx txt 家族，未编译入 MSGTAB、不流经驱动日志队列。故本项性质
+   为**契约补全**：1399 记录实携 ~6 插入（dump 的直拼回退可见），遇 %4+
+   文案旧定参代码确会丢失第 3+ 串，数组变体全覆盖。
+5. **活日志回归**：SandMan 退出窗内 server 泵（LOG_PUMP=yes）与 client
+   直连（自任 leader）两路径 log dump 渲染正常（1399/1242 等无回归）。
+
+### 22.3 08-P2-4/5：suspend-box / resume-box / snapshot default IPC 化
+
+1. `proc suspend-box TestOssB`（transport: ipc）→ JSON `{box,boxes,
+   suspended:true,count:3,message}`；proc info 复核 suspended=yes；
+   resume-box → suspended=no。全局形 `--all` → "3 process(es) in 13 box(es)"
+   （ipc）。直连降级 `--no-server` → "direct (SbieSvc SuspendResumeAll)"
+   正常。server 侧 SuspendResumeAll 一律经 SvcCall 专职线程（§22.4 坑注）。
+2. `box snapshot default T_snap`（读，ipc）→ `{box,current:"2",default:""}`；
+   `default T_snap 1`（写，ipc）→ DEFAULT 列翻 yes、message 回显；`--clear`
+   → 空回；直连降级两形态同构；`default T_snap 99` → NOT_FOUND rc5。
+   写路径统一走 Model SnapshotManager::SetDefault（server/client 共用一份
+   UTF-8 无 BOM 实现）。
+
+### 22.4 08-P2-6 + tpl 三连 + 08-P2-7
+
+1. **组级 --help**：`box --help` → 19 子命令清单（注册表字典序）+ notes
+   （snapshot/recover 第三级）；`proc --help` → 10 子命令；template 组注
+   Tmpl.Hide/--all 与 gen-browser 旗标；未注册组（`bogus --help`）退顶层
+   用法；组名前 `--help` 仍为顶层。
+2. **tpl 三连 transport**：list/info/check 全部 `transport: ipc`（Stub
+   退役；此前 check 为 stub 降级 direct）。`template info OpenWinInetCache`
+   ipc/direct 两路径同构；`template check DefaultBox` → config 来源行正常
+   （--json 行含 exists 字段）。
+3. **Tmpl.Hide**：`template list` 默认 **435** 行、`--all` **436** 行——
+   差 1 = ScreenReader（Misc 类，Templates.ini 唯一 Tmpl.Hide=y 条目，
+   实读 3943 行核对）；`--class WebBrowser` 组合过滤正常。server 侧
+   tpl.list 增 `all` 参数（Sandboxie.ini 定位路径在 SvcCall 内取得——
+   worker 线程不得自行触 SbieSvc LPC，03 §1 线程亲和）；client 直连路径
+   自行定位（client 进程语境安全）。
+
+### 22.5 回归 + 环境清理 + 基线还原
+
+1. **回归**：status/version/box list/box info/cfg get/set/unset/proc
+   list/start/kill/kill-all/force status/template list/info/check/log
+   dump/server status/start/stop 全通过；JSON 信封抽查合规（§7.2）。
+2. **环境清理**：TestOss、T_loc、T_tmp、T_fl、T_mix、T_snap、T_sb、T_d3fl、
+   T_d3loc、TestOssA、TestOssB 共 11 箱 `box delete --files` 全净（D:\sbie_oss_t
+   随 T_loc/T_d3loc 删除消失）；C:\Sandbox\Administrator 下空遗留目录 TestWA
+   （无 ini 引用）一并清除；UserSettings BoxGrouping 行回写为
+   `:DefaultBox,New_Box`；GlobalSettings 两笔测试杂散键（TestOss=KeyTrace *、
+   TestOssA=ExcludeFromTerminateAll y，见 §22.6 注记）cfg unset 清除。
+   终态 `box list` 仅 **DefaultBox + New_Box**。
+3. **基线还原**：测试窗内曾 taskkill SandMan（换取会话 leader 做活日志
+   路径验证）；终态按序还原——server stop → SandMan 重启（-autorun，自任
+   leader）→ server start → `server status` = RUNNING / LOG_PUMP=no /
+   GUARDIANS=yes，与波前一致。
+
+### 22.6 注记与坑
+
+1. **SbieSvc 线程亲和（复确认）**：server worker 线程直调 SvcClient LPC
+   会挂起——本波 HTplList/HTplCheck/HProcSuspendBoxImpl 全部 SvcCall 包裹
+   （03 §1 / §12 实测坑的再次应用）。
+2. **cfg set 杂散键异常（观察，未定位根因）**：测试窗内两笔
+   `cfg set <K> <V> --section <Box>` 在盘上 [GlobalSettings] 留下
+   `<Box>=<K> <V>` 形杂散键（波次 D3 亦留有同形一笔 TestOss=KeyTrace *），
+   且随后该 box 节内的正确键被移除（表现为 cfg unset NOT_FOUND）——疑似
+   SbieSvc 写路径在特定时序（server 重启窗/SbieSvc 双实例在跑）下的错位
+   写。**受控复测干净**：`cfg set ProbeKey z1 --section TestOssB` 落节
+   正确、无杂散、unset 干净；未再复现。登记备查，不阻塞本波（涉及
+   SbieSvc 双实例：实测机 tasklist 见两个 SbieSvc.exe——控制台实例为
+   SandMan 会话的代理进程，非双服务）。
+3. **MSVC 编译中文注释坑（工具链）**：临时 harness 源文件含 UTF-8 中文
+   注释时 cl（系统 GBK 代码页）会错位解析导致伪错误——ASCII-only 后消失。
+   本仓源文件均为 UTF-8 带 BOM 或 ASCII，不受影响（build_oss.bat 全程
+   0 error 佐证）。
+4. **server 自动重生**：server stop 后任意 client 命令会自动拉起新 server
+   （幂等设计）；终态以"SandMan 先启动持 leader、server 后启动
+   LOG_PUMP=no"还原波前形态。
+
+### 22.7 遗留
+
+1. 08-P2-1（box rules）/ 08-P2-2（template folder 面）——波次 F（观测增强）。
+2. SBIE_INI_TEMPLATE（0x1806）不绑定：判定处置见 docs\08 §2.3 回填
+   （通用 cfg 直写覆盖键等价；folder 面实现时再评估）。
+3. 06 P2-2 scan（275 检测器）/ 06 P2-10 iq 协议——独立波次（08 §5.2）。
+4. §22.6.2 杂散键异常根因未定位（受控不复现）——后续波次若再现优先查
+   SbieSvc SET_SETTING 的 section/value 装配路径。

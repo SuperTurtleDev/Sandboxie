@@ -111,23 +111,21 @@ std::wstring JoinInserts(const LogEntry& e)
     return s;
 }
 
-// 文案：SbieDll_FormatMessage0/1/2（SbieMsg.dll 消息表）。表键 = 完整 msgCode
-// （含严重度/设施位，如 1399 = 0x41020577——实机 .rsrc 遍历核实；低 16 位查
-// 不到）。注意 1399 的文案按设计就是 "%0"（无输出：进程启动通知供程序消费，
+// 文案：SbieDll_FormatMessage 数组变体（08-P1-2，SbieMsg.dll 消息表）。
+// 表键 = 完整 msgCode（含严重度/设施位，如 1399 = 0x41020577——实机 .rsrc
+// 遍历核实；低 16 位查不到）。%N ↔ ins[N]，前 5 个插入串置于 ins[1..5]——
+// 修复 ≥3 插入串丢失（消息表 %3×数十、%4×4，含 SBIE2201/1206/1235）。
+// 注意 1399 的文案按设计就是 "%0"（无输出：进程启动通知供程序消费，
 // msgs\Sbie-English-1033.txt:281）——FormatMessage 返回 0 时回退为插入串直拼
 // （QSbieAPI GetLog 对 1399/2199 也走专门分支，SbieAPI.cpp:2497-2522）。
 std::wstring FormatText(drv::Api* api, const LogEntry& e, bool raw)
 {
-    if (raw || !api || !api->SbieDll_FormatMessage0)
+    if (raw || !api || !api->SbieDll_FormatMessage)
         return JoinInserts(e);
-    WCHAR* p = nullptr;
-    if (e.ins.size() >= 2)
-        p = api->SbieDll_FormatMessage2(e.msgCode, e.ins[0].c_str(),
-                                        e.ins[1].c_str());
-    else if (e.ins.size() == 1)
-        p = api->SbieDll_FormatMessage1(e.msgCode, e.ins[0].c_str());
-    else
-        p = api->SbieDll_FormatMessage0(e.msgCode);
+    const WCHAR* args[6] = {};   // support.c 内部同容量；空槽必须 nullptr
+    for (size_t i = 0; i < e.ins.size() && i < 5; ++i)
+        args[i + 1] = e.ins[i].c_str();
+    WCHAR* p = api->SbieDll_FormatMessage(e.msgCode, args);
     std::wstring s;
     if (p) {
         s = p;

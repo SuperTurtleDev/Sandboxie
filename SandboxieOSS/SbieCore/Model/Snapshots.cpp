@@ -754,4 +754,29 @@ SbieStatus SnapshotManager::SetInfo(const std::wstring& id,
     return SbieStatus::OK;
 }
 
+// 波次 E（08-P2-5，additive）：[Current] Default 键改写。id 空 = 删键；
+// 否则置值（节不存在则建）。存在性校验在调用方（server op / client 命令）。
+SbieStatus SnapshotManager::SetDefault(const std::wstring& id)
+{
+    if (box_.fileRoot.empty())
+        return SbieStatus::GENERIC;
+    IniFile ini;
+    LoadIniFile(box_.fileRoot + L"\\" + kIniName, &ini);
+    if (id.empty()) {
+        if (auto* cur = ini.Find(L"Current")) {
+            for (auto it = cur->entries.begin(); it != cur->entries.end();) {
+                if (_wcsicmp(it->key.c_str(), L"Default") == 0)
+                    it = cur->entries.erase(it);
+                else
+                    ++it;
+            }
+        }
+    } else {
+        ini.Set(L"Current", L"Default", id);
+    }
+    if (!SaveIniFile(box_.fileRoot + L"\\" + kIniName, ini))
+        return SbieStatus::GENERIC;
+    return SbieStatus::OK;
+}
+
 } // namespace sbie::model

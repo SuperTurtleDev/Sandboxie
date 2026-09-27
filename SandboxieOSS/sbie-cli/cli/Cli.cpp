@@ -53,7 +53,8 @@ void PrintUsage(bool toStdout)
         L"       the host explorer)\n"
         L"  proc list|info|start|kill|kill-all|suspend|resume|\n"
         L"      suspend-box|resume-box|exempt\n"
-        L"      (kill-all <box> | kill-all --all for every box;\n"
+        L"      (kill-all <box> | kill-all --all for every box; --all skips\n"
+        L"       boxes with ExcludeFromTerminateAll=y unless --no-exceptions;\n"
         L"       suspend-box/resume-box <box> or --all;\n"
         L"       exempt <pid> <on|off|get> [--what internet|spooler]:\n"
         L"       per-process exemption control (API_PROCESS_EXEMPTION_CONTROL);\n"
@@ -110,11 +111,77 @@ void PrintUsage(bool toStdout)
         L"  --no-refresh      skip driver hot-reload on set operations\n"
         L"  --show-transport  diagnostics: report ipc/direct routing per command\n"
         L"  --sbie-dll-path <dir>  explicit SbieDll.dll directory\n"
-        L"  --help, -h        this text\n";
+        L"  --help, -h        this text; '<group> --help' lists that group's\n"
+        L"                    commands\n";
     if (toStdout)
         util::PrintUtf8(util::WideToUtf8(usage));
     else
         util::PrintErrUtf8(util::WideToUtf8(usage));
+}
+
+// 组级帮助（08-P2-6）：<group> --help 打印该组子命令清单（枚举自注册表，
+// std::map 字典序）。此前组名后 --help 与顶层完全同文。
+// 描述行人工维护；未登记的组退回顶层用法（调用方判定）。
+void PrintGroupUsage(const std::wstring& group, bool toStdout)
+{
+    struct GroupNote {
+        const wchar_t* group;
+        const wchar_t* note;   // 组内第三级路由/别名等组级提示
+    };
+    static const GroupNote kNotes[] = {
+        { L"status",  L"bare command (no subcommand)" },
+        { L"version", L"bare command (no subcommand)" },
+        { L"server",  L"" },
+        { L"box",     L"snapshot and recover have a third level:\n"
+                      L"  snapshot list|take|remove|select|set-info|default\n"
+                      L"  recover list|copy|add" },
+        { L"proc",    L"" },
+        { L"cfg",     L"" },
+        { L"template",L"list hides Tmpl.Hide=y templates (--all shows);\n"
+                      L"  gen-browser takes --browser/--access/--no-force and\n"
+                      L"  --box <b> --install|--remove" },
+        { L"log",     L"messages is an alias of dump" },
+        { L"trace",   L"" },
+        { L"force",   L"on takes optional <seconds>" },
+        { L"maint",   L"install/uninstall are admin-only service registration" },
+        { L"img",     L"create takes --size-mb; mount takes --protect/--admin-"
+                      L"only/--auto-unmount" },
+        { L"ramdisk", L"bare command (no subcommand)" },
+        { L"usb",     L"sync takes --dry-run" },
+        { L"doctor",  L"bare command (no subcommand)" },
+    };
+    const wchar_t* note = L"";
+    for (const GroupNote& n : kNotes)
+        if (group == n.group)
+            note = n.note;
+
+    const std::string g = util::WideToUtf8(group);
+    auto& reg = Commands();
+    auto gIt = reg.find(g);
+    if (gIt == reg.end())
+        return;   // 调用方保证已注册
+
+    std::wstring out = L"sbie-cli " + group + L" - command group help\n\n"
+        L"usage: sbie-cli [--json] [--quiet|-q] [--no-server] "
+        L"[--show-transport] ... <global options> " + group
+        + L" <command> [...]\n\n";
+    out += L"commands:\n";
+    for (const auto& sub : gIt->second) {
+        if (sub.first.empty()) {
+            out += L"  (this group takes no subcommand)\n";
+            continue;
+        }
+        out += L"  " + util::Utf8ToWide(sub.first) + L"\n";
+    }
+    if (*note) {
+        out += L"\n";
+        out += std::wstring(L"notes:\n") + note + L"\n";
+    }
+    out += L"\nrun 'sbie-cli --help' for the full command tree.\n";
+    if (toStdout)
+        util::PrintUtf8(util::WideToUtf8(out));
+    else
+        util::PrintErrUtf8(util::WideToUtf8(out));
 }
 
 int Route(const std::wstring& group, const std::wstring& sub,
@@ -141,6 +208,7 @@ int Run(const std::vector<std::wstring>& argv)
 
     GlobalOptions opts;
     std::vector<std::wstring> positional;
+    bool helpSeen = false;
 
     for (size_t i = 0; i < argv.size(); ++i) {
         const std::wstring& a = argv[i];
@@ -167,8 +235,7 @@ int Run(const std::vector<std::wstring>& argv)
             else
                 opts.sbieDllPath = argv[++i];
         } else if (a == L"--help" || a == L"-h") {
-            PrintUsage(true);
-            return 0;
+            helpSeen = true;   // 位置敏感性在注册表就绪后统一分派（下方）
         } else if (a.size() >= 2 && a[0] == L'-' && positional.empty()) {
             // 组名之前：此处只允许出现全局选项（--json/--password 等）
             EmitError(opts, SbieStatus::USAGE, L"unknown option: " + a);
@@ -180,12 +247,27 @@ int Run(const std::vector<std::wstring>& argv)
         }
     }
 
+    RegisterCommands();
+
+    // --help 分派（08-P2-6）：组名前 = 顶层用法；组名后 = 该组子命令清单
+    //（枚举自注册表）；组名未注册 = 顶层用法（向后兼容旧行为）
+    if (helpSeen) {
+        if (!positional.empty()) {
+            auto& reg = Commands();
+            const auto g = reg.find(util::WideToUtf8(positional[0]));
+            if (g != reg.end()) {
+                PrintGroupUsage(positional[0], true);
+                return 0;
+            }
+        }
+        PrintUsage(true);
+        return 0;
+    }
+
     if (positional.empty()) {
         PrintUsage(false);
         return 2;
     }
-
-    RegisterCommands();
 
     // 沙箱内自检（02 §6：sbie-cli client 不得在沙箱内运行）
     if (drv::LoadSbieDll(opts.sbieDllPath) && drv::InSandbox()) {

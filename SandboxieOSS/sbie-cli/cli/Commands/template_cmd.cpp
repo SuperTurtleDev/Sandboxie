@@ -13,6 +13,7 @@
 #include "../Output.h"
 #include "../ServerConnect.h"
 #include "../../ipcc/SbieIpc.h"
+#include "../../ipcc/TmplHide.h"
 
 #include "../../../SbieCore/DriverApi/DriverApi.h"
 #include "../../../SbieCore/Model/Templates.h"
@@ -70,20 +71,22 @@ int RequireBox(const CommandContext& ctx, const std::wstring& box)
 } // namespace
 
 // ---------------------------------------------------------------------------
-// sbie template list [--class <c>]（04 §4.6；表：NAME CLASS DESCRIPTION）
+// sbie template list [--class <c>] [--all]（04 §4.6；表：NAME CLASS DESCRIPTION；
+// 08-P2-7：默认滤 Tmpl.Hide=y 弃用模板，--all 显示——与 Plus 呈现对齐）
 // ---------------------------------------------------------------------------
 
 int CmdTemplateList(const CommandContext& ctx)
 {
-    srvconn::NoteDegraded();
-
     GlobalOptions o;
     std::vector<std::wstring> rest = cfgtmpl::AbsorbTrailingGlobals(ctx, &o);
 
     std::wstring clazz = L"*";
+    bool showAll = false;
     for (size_t i = 0; i < rest.size(); ++i) {
         if (rest[i] == L"--class" && i + 1 < rest.size()) {
             clazz = rest[++i];
+        } else if (rest[i] == L"--all") {
+            showAll = true;
         } else if (!rest[i].empty() && rest[i][0] == L'-') {
             return EmitError(o, SbieStatus::USAGE, L"unknown option: " + rest[i]);
         } else {
@@ -92,10 +95,13 @@ int CmdTemplateList(const CommandContext& ctx)
         }
     }
 
-    // IPC 优先（tpl.list；本构建 server op 占位 → 降级直连本地枚举）
+    // IPC 优先（tpl.list；波次 E 08 §22 补齐 server op——不再降级）。
+    // all = 08-P2-7：默认滤 Tmpl.Hide=y（与 Plus 呈现对齐），--all 显示
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"class", clazz);
+        if (showAll)
+            ipcroute::PSet(&params, L"all", true);
         ipcroute::Result r = ipcroute::Invoke(
             o, ipc::kOpTplList, params, true,
             [](const GlobalOptions& op, const json::JsonValue& data) {
@@ -114,12 +120,19 @@ int CmdTemplateList(const CommandContext& ctx)
     model::TemplateRegistry registry(nullptr, Svc());
     std::vector<model::TemplateInfo> list = registry.List(clazz);
 
+    // 08-P2-7：默认滤 Tmpl.Hide=y（ipcc/TmplHide 助手；client 语境可自行
+    // 定位 Sandboxie.ini），--all 显示
+    const std::vector<std::wstring> hidden =
+        showAll ? std::vector<std::wstring>() : tmplhide::HiddenNames();
+
     util::TablePrinter t;
     t.AddColumn(L"NAME");
     t.AddColumn(L"CLASS");
     t.AddColumn(L"DESCRIPTION");
     json::JsonValue rows = json::JsonValue::Array();
     for (const auto& ti : list) {
+        if (tmplhide::Contains(hidden, ti.name))
+            continue;
         t.AddRow({ ti.name, ti.clazz.empty() ? L"-" : ti.clazz,
                    ti.descr });
         json::JsonValue r = json::JsonValue::Object();
@@ -138,8 +151,6 @@ int CmdTemplateList(const CommandContext& ctx)
 
 int CmdTemplateInfo(const CommandContext& ctx)
 {
-    srvconn::NoteDegraded();
-
     GlobalOptions o;
     std::vector<std::wstring> rest = cfgtmpl::AbsorbTrailingGlobals(ctx, &o);
 
@@ -157,7 +168,7 @@ int CmdTemplateInfo(const CommandContext& ctx)
     if (name.empty())
         return EmitError(o, SbieStatus::USAGE, L"usage: sbie template info <name>");
 
-    // IPC 优先（tpl.info；本构建 server op 占位 → 降级直连）
+    // IPC 优先（tpl.info；波次 E 08 §22 补齐 server op——不再降级）
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"name", name);
@@ -189,7 +200,7 @@ int CmdTemplateInfo(const CommandContext& ctx)
             return r.exitCode;
     }
 
-    srvconn::NoteDegraded();
+    srvconn::NoteDegraded();   // server 缺席 / op 未实现的直连降级
     model::TemplateRegistry registry(nullptr, Svc());
     std::vector<std::pair<std::wstring, std::wstring>> settings;
     SbieStatus st = registry.Info(name, &settings);
@@ -258,6 +269,7 @@ int CmdTemplateApply(const CommandContext& ctx)
             return r.exitCode;
     }
 
+    srvconn::NoteDegraded();   // server 缺席 / op 未实现的直连降级
     int rc = RequireBox(ctx, box);
     if (rc != 0)
         return rc;
@@ -326,6 +338,7 @@ int CmdTemplateRevoke(const CommandContext& ctx)
             return r.exitCode;
     }
 
+    srvconn::NoteDegraded();   // server 缺席 / op 未实现的直连降级
     int rc = RequireBox(ctx, box);
     if (rc != 0)
         return rc;
@@ -363,8 +376,6 @@ int CmdTemplateRevoke(const CommandContext& ctx)
 
 int CmdTemplateCheck(const CommandContext& ctx)
 {
-    srvconn::NoteDegraded();
-
     GlobalOptions o;
     std::vector<std::wstring> rest = cfgtmpl::AbsorbTrailingGlobals(ctx, &o);
 
@@ -383,7 +394,7 @@ int CmdTemplateCheck(const CommandContext& ctx)
         return EmitError(o, SbieStatus::USAGE,
                          L"usage: sbie template check <box>");
 
-    // IPC 优先（tpl.check；本构建 server op 占位 → 降级直连本地对照读盘）
+    // IPC 优先（tpl.check；波次 E 08 §22 补齐 server op——不再降级）
     {
         json::JsonValue params = json::JsonValue::Object();
         ipcroute::PSet(&params, L"box", box);
@@ -400,6 +411,7 @@ int CmdTemplateCheck(const CommandContext& ctx)
             return r.exitCode;
     }
 
+    srvconn::NoteDegraded();   // server 缺席 / op 未实现的直连降级
     int rc = RequireBox(ctx, box);
     if (rc != 0)
         return rc;

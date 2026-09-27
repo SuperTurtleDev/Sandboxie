@@ -6,9 +6,9 @@
 // 等待退避 10ms→250ms（对齐 QSbieAPI run() 的 Idle 递增，SbieAPI.cpp:711-758）。
 //
 // server 写路径波次（04 §12）：
-//   * 文案：SbieDll_FormatMessage0/1/2（SbieMsg.dll 消息表，02 §3.5）——
-//     与 client 直连 FormatText 同构（表键 = 完整 msgCode；"%0" 类消息/
-//     无表项回退插入串直拼；表文案自带的 "SBIE%04u " 前缀剥去），
+//   * 文案：SbieDll_FormatMessage 数组变体（SbieMsg.dll 消息表，02 §3.7；
+//     08-P1-2 绑定）——与 client 直连 FormatText 同构（表键 = 完整 msgCode；
+//     "%0" 类消息/无表项回退插入串直拼；表文案自带的 "SBIE%04u " 前缀剥去），
 //     消除 §11 遗留 4 的"server 文案=插入串拼接"差异；
 //   * interactive queue 事件源（03 §6）：专职泵线程聚合
 //     *MANPROXY_<session> 队列请求为 log.event 推送（interactive=true
@@ -126,19 +126,17 @@ std::wstring JoinInserts(const std::vector<std::wstring>& ins)
 // SbieMsg.dll 文案（与 client 直连 FormatText 同构，log_cmd.cpp 对照）：
 // 表键 = 完整 msgCode（含严重度/设施位）；"%0" 消息（如 1399）与无表项
 // 回退插入串直拼；表文案自带 "SBIE%04u " 前缀剥去避免与行首重复。
+// 数组变体 SbieDll_FormatMessage（08-P1-2）：%N ↔ ins[N]，前 5 个插入串
+// 置于 ins[1..5]——修复 ≥3 插入串在渲染文本中丢失（消息表 %3×数十、%4×4）。
 std::wstring FormatEntryText(ULONG msgId, const std::vector<std::wstring>& ins)
 {
     drv::Api* api = drv::ApiP();
-    if (!api || !api->SbieDll_FormatMessage0)
+    if (!api || !api->SbieDll_FormatMessage)
         return JoinInserts(ins);
-    WCHAR* p = nullptr;
-    if (ins.size() >= 2)
-        p = api->SbieDll_FormatMessage2(msgId, ins[0].c_str(),
-                                        ins[1].c_str());
-    else if (ins.size() == 1)
-        p = api->SbieDll_FormatMessage1(msgId, ins[0].c_str());
-    else
-        p = api->SbieDll_FormatMessage0(msgId);
+    const WCHAR* args[6] = {};   // support.c 内部同容量；空槽必须 nullptr
+    for (size_t i = 0; i < ins.size() && i < 5; ++i)
+        args[i + 1] = ins[i].c_str();
+    WCHAR* p = api->SbieDll_FormatMessage(msgId, args);
     std::wstring s;
     if (p) {
         s = p;

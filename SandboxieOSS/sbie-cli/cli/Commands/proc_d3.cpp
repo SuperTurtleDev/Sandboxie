@@ -8,8 +8,8 @@
 //     proc resume-box  <box> | --all
 //     SbieSvc MSGID_PROCESS_SUSPEND_RESUME_ALL（SvcClient::SuspendResumeAll
 //     已实现未接线——本波接线；全局形 = EnumBoxes 逐箱）。
-//     纯 client 直连（SbieSvc 消息面）；server op 规格待 D1/D2 接线：
-//     proc.suspendBox / proc.resumeBox，params {box?}（box 空 = 全局）。
+//     波次 E（08-P2-4）：server op proc.suspendBox / proc.resumeBox 已接线
+//     （params {box?}，box 空 = 全局）——IPC 优先，降级直连 SbieSvc 消息面。
 //   * proc info 增强（06 P2-5，本波接手续完）：基础字段后追加派生列——
 //     flags 位名解码（SBIE_FLAG_*，vendor/api_flags.h 常量表）、image type
 //     （SbieApi_QueryProcessInfo 'gpit' → GPL core dll.h:85-121 的
@@ -97,18 +97,46 @@ int RunSuspendBox(const CommandContext& ctx, bool suspend)
     const wchar_t* verb = suspend ? L"suspend-box" : L"resume-box";
     if (!boxproc::LoadDriverOrError(ctx.opts))
         return ToExitCode(SbieStatus::DRIVER_UNAVAILABLE);
-    NoteDirect(ctx.opts, L"SbieSvc SuspendResumeAll; server op pending");
-
-    svc::SvcClient& svc = svc::SvcClient::Instance();
-    if (!svc.Connected())
-        return EmitError(ctx.opts, SbieStatus::SERVER_UNAVAILABLE,
-                         L"proc suspend-box requires SbieSvc");
 
     std::wstring box;
     std::vector<std::wstring> targets;
     const int parseRc = CollectBoxTargets(ctx, &box, &targets);
     if (parseRc != 0)
         return parseRc;
+
+    // IPC 优先（proc.suspendBox / proc.resumeBox——波次 E 08-P2-4 收口了 D3
+    // 的"server op 规格待接线"自注；box 空 = 全局）。写路径非幂等 retry=false；
+    // data 与下方直连路径同形（box/boxes/suspended/count/message）。
+    {
+        json::JsonValue params = json::JsonValue::Object();
+        if (!box.empty())
+            ipcroute::PSet(&params, L"box", box);
+        ipcroute::Result r = ipcroute::Invoke(
+            ctx.opts, suspend ? ipc::kOpProcSuspendBox : ipc::kOpProcResumeBox,
+            params, false,
+            [](const GlobalOptions& o, const json::JsonValue& data) {
+                if (o.json) {
+                    EmitJsonOk(o, data);
+                    return 0;
+                }
+                const json::JsonValue* m = data.isObject()
+                    ? data.find(L"message") : nullptr;
+                util::PrintLineUtf8(util::WideToUtf8(
+                    m && m->isString() ? m->asString()
+                                       : std::wstring(L"0 process(es)")));
+                return 0;
+            });
+        if (r.verdict == ipcroute::Verdict::Handled)
+            return r.exitCode;
+    }
+
+    // 直连降级（server 缺席 / op 未实现）
+    NoteDirect(ctx.opts, L"SbieSvc SuspendResumeAll");
+    svc::SvcClient& svc = svc::SvcClient::Instance();
+    if (!svc.Connected())
+        return EmitError(ctx.opts, SbieStatus::SERVER_UNAVAILABLE,
+                         L"proc " + std::wstring(verb)
+                             + L" requires SbieSvc");
 
     ULONG total = 0;
     json::JsonValue boxes = json::JsonValue::Array();

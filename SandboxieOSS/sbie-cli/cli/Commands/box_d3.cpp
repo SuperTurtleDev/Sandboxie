@@ -95,99 +95,9 @@ bool KnownBoxType(const std::wstring& t)
     return false;
 }
 
-// Snapshots.ini 的 [Current] Default 键改写（UTF-8 无 BOM 行级——与
-// SnapshotManager::SaveIniFile 同编码形态；empty id = 删该键）
-bool SetSnapshotsDefaultKey(const std::wstring& iniPath,
-                            const std::wstring& id)
-{
-    // 读原文（不存在 = 无快照文件，[Current] 落新节）
-    std::string bytes;
-    {
-        HANDLE h = CreateFileW(iniPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                               nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            char buf[16384];
-            DWORD n = 0;
-            while (ReadFile(h, buf, sizeof(buf), &n, nullptr) && n)
-                bytes.append(buf, n);
-            CloseHandle(h);
-        }
-    }
-    std::wstring text = util::Utf8ToWide(bytes);
-
-    // 定位 [Current] 节：替换已有 Default= 行或在该节头后插入
-    std::vector<std::wstring> lines;
-    {
-        size_t pos = 0;
-        while (pos <= text.size()) {
-            size_t eol = text.find(L'\n', pos);
-            if (eol == std::wstring::npos) {
-                lines.push_back(text.substr(pos));
-                break;
-            }
-            std::wstring ln = text.substr(pos, eol - pos);
-            while (!ln.empty() && (ln.back() == L'\r'))
-                ln.pop_back();
-            lines.push_back(ln);
-            pos = eol + 1;
-        }
-    }
-    const std::wstring defLine = L"Default=" + id;
-    bool inCurrent = false, replaced = false, hasCurrent = false;
-    std::wstring out;
-    for (const std::wstring& ln : lines) {
-        std::wstring trimmed = ln;
-        const size_t b = trimmed.find_first_not_of(L" \t");
-        if (b != std::wstring::npos && trimmed[b] == L'[') {
-            const bool isCurrent = b + 9 <= trimmed.size()
-                                   && _wcsnicmp(trimmed.c_str() + b,
-                                                L"[Current]", 9) == 0
-                                   && trimmed.find_first_not_of(L" \t", b + 9)
-                                          == std::wstring::npos;
-            inCurrent = isCurrent;
-            out += ln + L"\n";
-            if (isCurrent) {
-                hasCurrent = true;
-                if (!id.empty() && !replaced) {
-                    // 节头后立即插入（尚无 Default 行的文件）
-                    out += defLine + L"\n";
-                    replaced = true;
-                }
-            }
-            continue;
-        }
-        if (inCurrent && b != std::wstring::npos
-            && _wcsnicmp(trimmed.c_str() + b, L"Default=",
-                         wcslen(L"Default=")) == 0) {
-            replaced = true;
-            if (!id.empty())
-                out += defLine + L"\n";
-            continue;   // id 空 = 删行
-        }
-        out += ln + L"\n";
-    }
-    if (!id.empty() && !hasCurrent) {
-        if (!out.empty())
-            out += L"\n";
-        out += L"[Current]\n";
-        out += defLine + L"\n";
-    }
-    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r'))
-        out.pop_back();
-    out += L"\n";
-
-    const std::string utf8 = util::WideToUtf8(out);
-    HANDLE h = CreateFileW(iniPath.c_str(), GENERIC_WRITE, 0, nullptr,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return false;
-    DWORD written = 0;
-    const BOOL ok = WriteFile(h, utf8.data(), (DWORD)utf8.size(), &written,
-                              nullptr);
-    CloseHandle(h);
-    return ok && written == utf8.size();
-}
+// [Current] Default 键的行级改写助手已并入 Model
+// SnapshotManager::SetDefault（波次 E 08-P2-5：server op 与 client
+// 直连两路径共用一份实现）。
 
 } // namespace
 
@@ -540,7 +450,8 @@ int CmdBoxListD3(const CommandContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
-// box snapshot default <box> [<id>|--clear]（06 P2-3）
+// box snapshot default <box> [<id>|--clear]（06 P2-3；波次 E 08-P2-5 IPC 化：
+// box.snap.default 读/写两形态——族内其余 5 动词均有 op，default 不再恒直连）
 // ---------------------------------------------------------------------------
 
 int CmdBoxSnapshotDefault(const CommandContext& ctx)
@@ -565,6 +476,50 @@ int CmdBoxSnapshotDefault(const CommandContext& ctx)
                          L"usage: sbie-cli box snapshot default <box> "
                          L"[<snapshot-id>] [--clear]");
 
+    // IPC 优先（box.snap.default；读形态 retry=true，写形态非幂等 retry=false）
+    {
+        const bool isRead = pos.size() == 1 && !clear;
+        json::JsonValue params = json::JsonValue::Object();
+        ipcroute::PSet(&params, L"name", pos[0]);
+        if (!isRead) {
+            if (!clear)
+                ipcroute::PSet(&params, L"id", pos[1]);
+            else
+                ipcroute::PSet(&params, L"clear", true);
+        }
+        ipcroute::Result r = ipcroute::Invoke(
+            ctx.opts, ipc::kOpBoxSnapDefault, params, isRead,
+            [isRead](const GlobalOptions& o, const json::JsonValue& data) {
+                if (o.json) {
+                    EmitJsonOk(o, data);
+                    return 0;
+                }
+                if (isRead) {
+                    auto cell = [&data](const wchar_t* k) {
+                        const json::JsonValue* v = data.isObject()
+                            ? data.find(k) : nullptr;
+                        return v && v->isString() && !v->asString().empty()
+                            ? v->asString() : std::wstring(L"-");
+                    };
+                    EmitKv(o,
+                           { { L"current", cell(L"current") },
+                             { L"default", cell(L"default") } },
+                           json::JsonValue::Object());
+                    return 0;
+                }
+                const json::JsonValue* m = data.isObject()
+                    ? data.find(L"message") : nullptr;
+                EmitMessage(o, m && m->isString()
+                            ? m->asString()
+                            : std::wstring(L"default snapshot updated"));
+                return 0;
+            });
+        if (r.verdict == ipcroute::Verdict::Handled)
+            return r.exitCode;
+    }
+
+    // 直连降级（server 缺席 / op 未实现）
+    srvconn::NoteDegraded();
     if (!boxproc::LoadDriverOrError(ctx.opts))
         return ToExitCode(SbieStatus::DRIVER_UNAVAILABLE);
 
@@ -578,7 +533,6 @@ int CmdBoxSnapshotDefault(const CommandContext& ctx)
     std::wstring currentId, defaultId;
     std::vector<model::SnapshotInfo> snaps = sm.List(&currentId, &defaultId);
 
-    const std::wstring iniPath = bi.fileRoot + L"\\Snapshots.ini";
     if (pos.size() == 1 && !clear) {
         // 显示
         auto nameOf = [&](const std::wstring& id) {
@@ -620,12 +574,12 @@ int CmdBoxSnapshotDefault(const CommandContext& ctx)
             return EmitError(ctx.opts, SbieStatus::NOT_FOUND,
                              L"snapshot not found: " + id);
     }
-    // [Current] Default=<id>（QSbieAPI SetDefaultSnapshot 键面；UTF-8 无 BOM
-    // 与 SnapshotManager::SaveIniFile 同形态——WritePrivateProfileStringW 的
-    // ANSI 往返会破坏非 ASCII 快照名，故行级改写）
-    if (!SetSnapshotsDefaultKey(iniPath, clear ? std::wstring() : id))
+    // [Current] Default=<id>（QSbieAPI SetDefaultSnapshot 键面）；波次 E 起
+    // 经 Model SnapshotManager::SetDefault（UTF-8 无 BOM 整文件 Load→改→Save，
+    // 非 ASCII 快照名安全——WritePrivateProfileStringW 的 ANSI 往返会破坏之）
+    if (sm.SetDefault(id) != SbieStatus::OK)
         return EmitError(ctx.opts, SbieStatus::GENERIC,
-                         L"failed to write " + iniPath);
+                         L"failed to write Snapshots.ini [Current] Default");
     if (ctx.opts.json) {
         json::JsonValue d = json::JsonValue::Object();
         d.set(L"box", json::JsonValue(bi.name));

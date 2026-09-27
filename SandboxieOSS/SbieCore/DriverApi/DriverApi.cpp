@@ -83,6 +83,7 @@ bool BindAll(HMODULE h, std::wstring* missing)
         { "SbieDll_FormatMessage0",         (FARPROC*)&a.SbieDll_FormatMessage0 },
         { "SbieDll_FormatMessage1",         (FARPROC*)&a.SbieDll_FormatMessage1 },
         { "SbieDll_FormatMessage2",         (FARPROC*)&a.SbieDll_FormatMessage2 },
+        { "SbieDll_FormatMessage",          (FARPROC*)&a.SbieDll_FormatMessage },
         { "SbieDll_TranslateNtToDosPath",   (FARPROC*)&a.SbieDll_TranslateNtToDosPath },
     };
     *missing = L"missing exports:";

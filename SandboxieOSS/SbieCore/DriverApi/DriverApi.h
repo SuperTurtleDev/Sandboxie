@@ -156,6 +156,10 @@ using P_SbieDll_FormatMessage0  = WCHAR* (CALLBACK*)(ULONG code);
 using P_SbieDll_FormatMessage1  = WCHAR* (CALLBACK*)(ULONG code, const WCHAR* ins1);
 using P_SbieDll_FormatMessage2  = WCHAR* (CALLBACK*)(ULONG code, const WCHAR* ins1,
                                                      const WCHAR* ins2);
+// 数组变体（08-P1-2；core\dll\support.c:830 SbieDll_FormatMessage）：
+// ins 为 6 槽数组，消息占位符 %N ↔ ins[N]（定参变体内部位 1/2 同约定，
+// ins[0] 不用）——传前 5 个插入串置于 ins[1..5]，空槽必须为 nullptr。
+using P_SbieDll_FormatMessage   = WCHAR* (CALLBACK*)(ULONG code, const WCHAR** ins);
 using P_SbieDll_TranslateNtToDosPath = BOOLEAN (CALLBACK*)(WCHAR* path);
 
 // 绑定表实现：成员名与导出名一致（02 §1）。任一导出缺失（老版本 DLL）时
@@ -205,6 +209,7 @@ struct Api {
     P_SbieDll_FormatMessage0    SbieDll_FormatMessage0;
     P_SbieDll_FormatMessage1    SbieDll_FormatMessage1;
     P_SbieDll_FormatMessage2    SbieDll_FormatMessage2;
+    P_SbieDll_FormatMessage     SbieDll_FormatMessage;
     P_SbieDll_TranslateNtToDosPath SbieDll_TranslateNtToDosPath;
 };
 

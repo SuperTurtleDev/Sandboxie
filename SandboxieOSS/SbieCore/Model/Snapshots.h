@@ -35,6 +35,12 @@ public:
     SbieStatus SetInfo(const std::wstring& id,
                        std::optional<std::wstring> name,
                        std::optional<std::wstring> info);
+    // 波次 E（08-P2-5，additive）：[Current] Default=<id> 读写。
+    // SetDefault：id 空 = 删该键（清除默认标记）；快照 id 存在性由调用方
+    // 先行校验（与 client box snapshot default 的直连语义一致）。
+    // 编码同 SaveIniFile（UTF-8 无 BOM）——WritePrivateProfileStringW 的
+    // ANSI 往返会破坏非 ASCII 快照名，故整文件 Load→改→Save。
+    SbieStatus SetDefault(const std::wstring& id);
 
 private:
     BoxInfo box_;

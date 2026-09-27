@@ -46,5 +46,8 @@ int Route(const std::wstring& group, const std::wstring& sub,
 
 // 用法文本（--help / USAGE 错误，stdout / stderr）
 void PrintUsage(bool toStdout);
+// 组级帮助（08-P2-6）：<group> --help 打印该组子命令清单（注册表枚举）。
+// group 必须已注册（未注册组由调用方退回 PrintUsage）。
+void PrintGroupUsage(const std::wstring& group, bool toStdout);
 
 } // namespace sbie::cli
