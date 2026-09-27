@@ -139,9 +139,9 @@ log.event 仍为 Stub，client 直连实现，功能不受损）。
 | `AutoDelete` / `AutoRemove` | 空箱后自动清内容 / 清空后连节删（`SandMan.cpp:2659-2672`、`:2677-2689`） | 无监视者 | **07-P0-2** |
 | `Temp_`/`Local_Temp_` 模板 | 空箱后从 Template 列表移除并清节（`SandMan.cpp:2640-2657`） | 无监视者 | **07-P0-2** |
 | `OnFileRecovery` | 恢复文件前执行外部检查器命令（`SandManRecovery.cpp:109-131`，含 FileChecker addon） | `box recover copy` 不执行检查器 | **07-P1-3** |
-| `ForceUsbDrives`/`UsbSandbox`/`DisabledForceVolume` | 守护枚举 USB 卷→写 `ForceFolder` 列表（`SandMan.cpp:2272-2321`，含不存在时自动建箱并设 UseFileDeleteV2 等初始键） | 键可写但无人生成 ForceFolder | **07-P2-1** |
-| `RamDiskSizeKb`/`RamDiskLetter`/`UseRamDisk` | 挂载由 SandboxieTools 的 ImDisk 驱动承担；SbieSvc 侧编排接口在核心（`Sandboxie\core\svc\MountManager.h:82-91`） | 键可写；运行时组件许可证禁用 | N-A-7 |
-| `UseFileImage`/`ConfidentialBox` | 磁盘映像创建/挂载（ImBox，SandboxieTools） | 许可证禁用 | 06 N-A-1 维持 |
+| `ForceUsbDrives`/`UsbSandbox`/`DisabledForceVolume` | 守护枚举 USB 卷→写 `ForceFolder` 列表（`SandMan.cpp:2272-2321`，含不存在时自动建箱并设 UseFileDeleteV2 等初始键） | ~~键可写但无人生成 ForceFolder~~ **已收口（波 D2）：`sbie usb sync [--dry-run]` 一次性接管 + `usb status` 卷表，docs/04 §18** | **07-P2-1** |
+| `RamDiskSizeKb`/`RamDiskLetter`/`UseRamDisk` | 挂载执行者在 **SbieSvc core**（GPLv3，`MountManager.cpp` AcquireBoxRoot：进程注入路径自动挂载，RamDiskSizeKb 下限 100MB/共享单盘）；仅 ImDisk 驱动属 SandboxieTools 运行时 | **已收口（波 D2）：`box set UseRamDisk=y` 写键即生效 + `sbie ramdisk status` 聚合（含 IMBOX_QUERY 空 reg_root 共享盘状态），docs/04 §18.1 可行性旁注** | N-A-7 |
+| `UseFileImage`/`ConfidentialBox` | 磁盘映像创建/挂载的**编排与 wire 协议全在 SbieSvc core**（MSGID_IMBOX_CREATE/MOUNT/UNMOUNT/ENUM/QUERY，`MountManager.cpp` Handler，挂同一 LPC 端口）；仅 ImBox.exe/ImDisk 运行时属 SandboxieTools | **已收口（波 D2）：`sbie img list/status/create/mount/unmount` 经 vendor/MountManagerWire.h 直达 SbieSvc；`box set UseFileImage=y` 写键即生效（首进程自动挂载）。docs/04 §18.1**（原"许可证禁用"判断对协议面不成立，仅运行时组件成立，已纠正） | 06 N-A-1 维持→更新 |
 
 其余键的效果执行者核实结果：`BorderColor`/`BoxNameTitle`/`CoverBoxedWindows` 等视觉键由
 SbieDll（核心，冻结期内不变）在沙箱进程内实现——键面即功能；`StartProgram`/`StartService`/
@@ -176,11 +176,11 @@ ini 数据结构——键面即功能。
 
 | # | 功能【SandMan 规格 / 来源】 | OSS 现状 | CLI 建议 | 规模 |
 |---|---|---|---|---|
-| 07-P2-1 | **USB 沙箱自动接管**：全局 `ForceUsbDrives=y` 时，枚举本机 USBSTOR 卷（卷序列号十六进制 `HHHH-LLLL` 为键），未被 `DisabledForceVolume` 排除的卷的挂载点全部写入 `UsbSandbox` 箱的 `ForceFolder`；目标箱不存在时自动创建并设 V2 删除+卷序列号键（`SandMan.cpp:2272-2321`；设置页卷清单 `SettingsWindow.cpp:1686-1744`）。 | 键可写无生成者（§2）。 | `sbie usb sync`（一次性：枚举→建箱（若缺）→写 ForceFolder，输出将接管的卷表）；长期可挂 server 周期任务。卷枚举需 SetupAPI（新 Util 模块）。 | 中（卷枚举） |
-| 07-P2-2 | **箱类型派生判定**：由键组合算出 7 类显示类型与图标（Hardened=UseSecurityMode、+Plus=叠加 UsePrivacyMode、Compartment=NoSecurityIsolation、Insecure=UnsecureDebugging、Private=UseFileImage+Confidential、Open=根开放）（`SbiePlusAPI.cpp:682-706`）。 | `box info` 仅 6 字段（name/enabled/三根路径/has_processes/has_snapshots，`box_manage.cpp:96-117`）。 | `box info` 加 `type` 派生字段（纯键面判定，无 IO）+ `NeverDelete`/`box size` 顺带；`box list --type` 过滤。 | 微 |
-| 07-P2-3 | **Start.exe 伪程序入口的验收与文档**：运行菜单的"运行程序/开始菜单/宿主开始菜单/autorun/默认浏览器/邮件/资源管理器/注册表/程序和功能/cmd(管理员/32 位)"全部通过把伪命令串交给 Start.exe 实现（`SbieView.cpp:1482-1521`：`run_dialog`/`default_browser`/`mail_agent`/`auto_run`/`explorer.exe …`/`regedit.exe`/`control.exe appwiz.cpl`/`cmd.exe` 等）。 | `proc start <box> <cmd...>` 命令串透传 Start.exe（`proc_cmd.cpp` 直连与 IPC 同为命令行转发），**理论上原样可用**但从未验收、未文档化。 | 补验收用例（6 个伪命令逐一跑通）+ `proc start --help` 文档小节。 | 微（测试+文档） |
-| 07-P2-4 | **故障排除向导**（Troubleshooting Wizard）：JS 脚本驱动的问题诊断树，随已知应用库（`Troubleshooting/` 目录：AppCompatibility.js、KnownApps/、Sandboxing/、UI/、多语言 _lang.json）分发（`SandMan.cpp:816`、`Wizards/BoxAssistant.cpp`）。 | 无。脚本资产在仓库内（GPL 侧），无解释器。 | 长期可选：`sbie doctor <app>` 执行诊断脚本需要 JS 引擎——与"无第三方依赖"冲突，**建议不做或改为静态检查清单**（读 KnownApps 建议键组）。列为观察项。 | 大（若做）/ 0（不做） |
-| 07-P2-5 | **浏览器兼容模板生成器**（TemplateWizard）：选浏览器 exe→自动识别引擎（Gecko/Chromium）与 profile 目录→勾选 cookies/密码/书签/偏好等直接访问项→生成 `Local_` 模板节并可三模式挂到箱（`Wizards/TemplateWizard.cpp` 全文）。 | 模板节可由 `cfg set --section Template_Local_*` 手写（键面通），但浏览器探测与 profile 枚举逻辑无等价。 | `sbie template wizard` 形态不现实；可做 `template scan-browser <exe>` 输出建议的 Local_ 节文本（探测逻辑为注册表/文件读，可自研）。 | 中（探测） |
+| 07-P2-1 | **USB 沙箱自动接管**（✅ 已收口：`sbie usb sync [--dry-run]` + `sbie usb status`——实现与决策见 docs/04 §18）：全局 `ForceUsbDrives=y` 时，枚举本机 USBSTOR 卷（卷序列号十六进制 `HHHH-LLLL` 为键），未被 `DisabledForceVolume` 排除的卷的挂载点全部写入 `UsbSandbox` 箱的 `ForceFolder`；目标箱不存在时自动创建并设 V2 删除+卷序列号键（`SandMan.cpp:2272-2321`；设置页卷清单 `SettingsWindow.cpp:1686-1744`）。 | ~~键可写无生成者（§2）~~ 已收口。 | ~~`sbie usb sync`…卷枚举需 SetupAPI~~ 实现弃 SetupAPI：卷设备 IOCTL_STORAGE_QUERY_PROPERTY 查 BusType=Usb（纯 kernel32，覆盖 UASP；决策见 04 §18.1.4）；守护形态（周期任务）列为遗留。 | 已完成 |
+| 07-P2-2 | **箱类型派生判定**（✅ 已收口（波 D3，docs/04 §19）：`box info` +type/never_delete/auto_delete/empty/initialized 派生列（06 P2-4 同步收口）+ `box list --type <t>` 过滤；派生规格 Hardened=UseSecurityMode、+Plus=叠加 UsePrivacyMode、Compartment=NoSecurityIsolation、Insecure=UnsecureDebugging、Private=UseFileImage+ConfidentialBox，输出用波 B 预设名）：由键组合算出 7 类显示类型与图标（`SbiePlusAPI.cpp:682-706`）。 | ~~`box info` 仅 6 字段~~ 已收口。 | 已实现（box_d3.cpp，实测 docs/04 §21.2）。 | 已完成 |
+| 07-P2-3 | **Start.exe 伪程序入口的验收与文档**（✅ 已收口（波 D3，docs/04 §19.2.4）——**实测发现裸转发不可用**：Start.exe 直投 CreateProcess 对伪串必然 GENERIC（core start.cpp:432-438），`proc start` 现对首命令 token 命中 default_browser/mail_agent/run_dialog/auto_run 时改写为 "Start.exe \<pseudo\>" 再转发；default_browser 实测启动 msedge 于箱内，docs/04 §21.2.13）：运行菜单伪命令全部经 Start.exe 解释（`SbieView.cpp:1482-1521`）。 | ~~透传理论上可用但从未验收~~ 实测推翻并修复。 | 路由已实现（proc_d3.cpp CmdProcStartD3）；explorer/regedit/control 等 literal 形本就可用（非伪串）。 | 已完成 |
+| 07-P2-4 | **故障排除向导**（Troubleshooting Wizard）（✅ 已收口为静态体检（波 D3，docs/04 §19.2.3）：`sbie doctor`——sbiedll/abi、driver/svc SCM+设备交叉核证、安装布局、ini 定位、配置锁、FileRootPath 盘符/冲突、DefaultBox、守护键、server 连接；全只读，rc 0/1，实测 13 项全 ok）：JS 脚本驱动的问题诊断树（`SandMan.cpp:816`、`Wizards/BoxAssistant.cpp`）。 | 脚本资产在仓库内（GPL 侧），无解释器。 | 按原建议做静态检查清单（JS 引擎与"无第三方依赖"冲突）；诊断树脚本化列为长期观察项。 | 已完成（精简形态） |
+| 07-P2-5 | **浏览器兼容模板生成器**（TemplateWizard）（✅ 已收口（波 D3，docs/04 §19.2.2）：`sbie template gen-browser [--browser <name>] [--access <a,b,…>] [--no-force] [--box <NAME> --install|--remove]`——注册表 App Paths+安装目录探测 7 浏览器（Chrome/Edge/Firefox/Chromium/Brave/Vivaldi/Opera）、引擎分档 profile 探测+变量化、生成 [Template_Local_*] 节（Tmpl.Class=WebBrowser/ForceProcess/OpenFilePath），缺省 dry-run；本机 Edge 全周期实测（dry-run→install→box get→remove 还原），docs/04 §21.2.1）：选浏览器 exe→自动识别引擎与 profile→勾选直接访问项→生成 `Local_` 模板节（`Wizards/TemplateWizard.cpp` 全文）。 | ~~浏览器探测与 profile 枚举逻辑无等价~~ 已收口。 | 实现按 docs/07 §3.3 记录的行为规格+GPL Templates.ini 键面形态自研（SandMan 源码未读未复制）。 | 已完成 |
 
 ### 3.4 N-A — GUI-only / 许可证 / 产品域（新登记 12 组，06 已有 16 项不重复）
 
@@ -192,8 +192,8 @@ ini 数据结构——键面即功能。
 | 07-N-A-4 | 即时恢复弹窗与消息弹窗的窗口交互（置顶/到前台/多显示器）（`PopUpWindow.cpp` 全文；`SandManRecovery.cpp:30-50`） | GUI 交互域；事件呈现等价已有（`log watch` 2199 等），决策等价为 06 P2-10。 |
 | 07-N-A-5 | 恢复历史日志窗口/消息日志窗口/保留已终止进程树（`SandMan.cpp:3064-3110,930`） | GUI 日志面板域。 |
 | 07-N-A-6 | 异步操作进度与取消（Stop Operations 右键、进度对话框）（`SbieView.cpp:183`；`SandMan.cpp:4254-4289`） | GUI 进度域；CLI 一次性命令无长任务面板。 |
-| 07-N-A-7 | RAM 磁盘（RamDiskSizeKb/RamDiskLetter/UseRamDisk 键；挂载编排接口在核心 `Sandboxie\core\svc\MountManager.h:82-91`） | 键可写；**运行时挂载驱动（ImDisk）属 SandboxieTools，许可证禁用**（01 §2）。与 06 N-A-1 同源。 |
-| 07-N-A-8 | 磁盘映像加密箱全家：BoxImageWindow（口令+≥256MB 映像创建）、Mount/Unmount Box Image、Lock All Encrypted Boxes、NewBoxWizard 的 Confidential 类型（`Windows/BoxImageWindow.cpp`；`SandMan.cpp:839,3563-3583`；`SbieView.cpp:222-223`） | ImBox 属 SandboxieTools，许可证禁用（06 N-A-1 维持，此处补全 GUI 面细节）。 |
+| 07-N-A-7 | RAM 磁盘（RamDiskSizeKb/RamDiskLetter/UseRamDisk 键；挂载执行者在核心 MountManager，运行时 ImDisk 属 SandboxieTools） | ~~N-A~~ **波 D2 更新为已 CLI 化**：`ramdisk status` 聚合 + 写键即生效（挂载由 SbieSvc 在首进程路径自动完成）；ImDisk 运行时缺席时状态面如实呈现 "unknown"。docs/04 §18 |
+| 07-N-A-8 | 磁盘映像加密箱全家：BoxImageWindow（口令+≥256MB 映像创建）、Mount/Unmount Box Image、Lock All Encrypted Boxes、NewBoxWizard 的 Confidential 类型（`Windows/BoxImageWindow.cpp`；`SandMan.cpp:839,3563-3583`；`SbieView.cpp:222-223`） | ~~ImBox 属 SandboxieTools，许可证禁用~~ **波 D2 更新**：挂载编排/协议在 SbieSvc core（GPLv3）——`img create/mount/unmount/list/status` 已 CLI 化（真实 ImBox 周期实测通过，docs/04 §18.3.4）；GUI 窗口（口令对话框/Lock All 一键）无 CLI 呈现面；`box create --type confidential` 复议项见 04 §18.4。 |
 | 07-N-A-9 | addons 在线管理与更新检查（AddonManager 安装/移除可选组件、更新源）（`AddonManager.cpp:46-101`；设置页 `SettingsWindow.cpp:2215-2275`） | 产品域（在线下载 + UpdUtil 许可证）；FileChecker 的**数据面**已并入 07-P1-3（检查器执行器），脚本用户可自制。 |
 | 07-N-A-10 | Setup 首跑向导（UI 模式选择/WFP 开关/外壳集成/开机自启/更新偏好）（`Wizards/SetupWizard.cpp` 全文） | GUI 向导；其每一项落点均已有 CLI 组合：NetworkEnableWFP 键 / 外壳注册表（06 P2-8）/ SbieCtrl_EnableAutoStart 用户节键 / 更新项 N-A。 |
 | 07-N-A-11 | 多语言 UI（24 个 .ts）与无障碍（字体缩放/高对比/替行色）（`SandMan\sandman_*.ts`；`SettingsWindow.cpp:1798-1823`） | `Language` 键可写（`$` 节）；CLI 输出面向脚本（--json），自身不做 i18n；无障碍为 GUI 呈现域。 |
@@ -217,24 +217,24 @@ ini 数据结构——键面即功能。
 |---|---|---|---|
 | 终止/挂起/启用/清理/容量/配置锁/恢复基础/参数接线 | P0-1..12 | — | ✅ 已收口（06 §3.1 登记） |
 | 禁用强制/维护启停/全局终止/参数语义 | P1-1..7 | — | ✅ 已收口（06 §3.2 登记） |
-| trace/监控命令组 | P2-1 | （07-N-A-12 仅窗口形态） | 待做 |
-| 模板应用检测（scan） | P2-2 | — | 待做（07-P2-5 为其浏览器特化建议） |
-| 快照默认标记 | P2-3 | — | 待做 |
-| 空置/初始化状态 | P2-4 | 07-P2-2（扩展为类型+状态派生组） | 待做 |
-| proc info 令牌/图像类型列 | P2-5 | — | 待做 |
-| 箱级整体挂起/恢复 | P2-6 | 07 补充：全局形（Suspend All=逐箱 SetSuspendedAll，`SandMan.cpp:3554-3561`）亦缺，`--all` 旗标同做 | 待做 |
-| 组件装卸 install/uninstall | P2-7 | — | 待做（07-N-A 中 SetupWizard 的外壳项与其相邻） |
-| 外壳集成/快捷方式 | P2-8 | — | 待做 |
-| 节全量导出（box/cfg dump） | P2-9 | 07-P1-4 依赖并扩展（节**写入**/替换也要暴露） | 待做（升格为 P1 依赖） |
-| interactive 人工决策 | P2-10 | 07-N-A-4 弹窗 4 类语义细化（`PopUpWindow.cpp:315` 打印假脱机、`:496-503` 大文件迁移/上网询问、`:558-565` 即时恢复、`:665` 迁移进度） | 待做 |
-| 驱动缓存旁路写/whoami/explore/进程豁免 | P2-11..14 | — | 待做 |
+| trace/监控命令组 | P2-1 | （07-N-A-12 仅窗口形态） | ✅ 已收口（波 D1，docs/04 §20：`trace watch|dump`——server TracePump 订阅推送 + `--no-server` 直连自拉；监控数据类型覆盖 core `api_flags.h` 全部 18 个 `MONITOR_*` 码，含 disposition/trace/user 语义位渲染——类型覆盖清单见 04 §20.4） |
+| 模板应用检测（scan） | P2-2 | — | **后续**（波 D3 处置：逐模板检测器集量级大，独立波次；docs/04 §21.3） |
+| 快照默认标记 | P2-3 | — | ✅ 已收口（波 D3：`box snapshot default`，docs/04 §19/§21） |
+| 空置/初始化状态 | P2-4 | 07-P2-2（扩展为类型+状态派生组） | ✅ 已收口（波 D3：box info 派生列组） |
+| proc info 令牌/图像类型列 | P2-5 | — | ✅ 已收口（波 D3：flags_decoded/image_type/elevated/wow64） |
+| 箱级整体挂起/恢复 | P2-6 | 07 补充：全局形（Suspend All=逐箱 SetSuspendedAll，`SandMan.cpp:3554-3561`）亦缺，`--all` 旗标同做 | ✅ 已收口（波 D3：`proc suspend-box/resume-box <box>|--all`） |
+| 组件装卸 install/uninstall | P2-7 | — | ✅ 已收口（波 D3：`maint install/uninstall`，KmdUtil） |
+| 外壳集成/快捷方式 | P2-8 | — | **不做**（波 D3 处置：宿主 GUI 集成域，脚本价值低；docs/04 §21.3） |
+| 节全量导出（box/cfg dump） | P2-9 | 07-P1-4 依赖并扩展（节**写入**/替换也要暴露） | ✅ 已收口（波 D3 用户面：`box dump`/`cfg dump`——原始节读 NO_GLOBAL+GlobalSettings 枚举坑修复；节整读/整写波 B 已落） |
+| interactive 人工决策 | P2-10 | 07-N-A-4 弹窗 4 类语义细化（`PopUpWindow.cpp:315` 打印假脱机、`:496-503` 大文件迁移/上网询问、`:558-565` 即时恢复、`:665` 迁移进度） | **后续**（波 D3 处置：需 iq.ask/answer 协议往返面；现自动拒绝+log watch 已可用） |
+| 驱动缓存旁路写/whoami/explore/进程豁免 | P2-11..14 | — | P2-12/13/14 ✅ 已收口（波 D3：cfg whoami/box explore/proc exempt）；P2-11 **不做**（边缘+误用风险） |
 | **OnBoxDelete 触发执行** | — | **07-P0-1** | ✅ 已收口（波次 A，docs/04 §16） |
 | **空箱守护（OnBoxTerminate/AutoDelete/AutoRemove/Temp 模板清理）** | — | **07-P0-2** | ✅ 已收口（波次 A，docs/04 §16） |
 | **建箱类型预设** | — | **07-P1-1** | ✅ 已收口（波次 B，docs/04 §17） |
 | **导出/导入归档** | — | **07-P1-2** | ✅ 已收口（波次 B，docs/04 §17） |
 | **恢复移动语义+检查器** | — | **07-P1-3** | ✅ 已收口（波次 B，docs/04 §17） |
 | **复制沙箱** | — | **07-P1-4** | ✅ 已收口（波次 B，docs/04 §17） |
-| USB 接管/类型派生/伪命令验收/doctor/浏览器模板 | — | 07-P2-1..5 | 新发现 |
+| USB 接管/类型派生/伪命令验收/doctor/浏览器模板 | — | 07-P2-1..5 | ✅ 全部已收口（07-P2-1 波 D2；07-P2-2..5 波 D3，docs/04 §18/§19/§21） |
 | ImBox/RAM 盘/更新/addons/托盘热键布局等 | N-A-1/2/5 等 | 07-N-A-1..12（细化补全） | 维持 N-A |
 
 ### 4.3 已确认覆盖（非缺口，抽样列示）
@@ -256,29 +256,28 @@ add/--to/--overwrite）、模板应用/撤销/列生效、全局与箱级键面�
 
 | 域 | 可数项 | 已覆盖（含键面/组合） | 覆盖率 | 主要缺口 |
 |---|---|---|---|---|
-| A 菜单/工具栏/托盘/右键动作 | 32（扣除 N-A 15 项） | 20 | **63%** | 预设建箱、导出导入、复制、（06 已列）trace/装卸/外壳/挂起全局形 |
+| A 菜单/工具栏/托盘/右键动作 | 32（扣除 N-A 15 项） | 25 | **78%** | ~~预设建箱、导出导入、复制~~（波 B）、~~trace~~（波 D1）、~~装卸/挂起全局形/伪命令~~（波 D3）；余外壳（P2-8 不做）、向导窗体形态（N-A） |
 | B SettingsWindow ini 键 | 36 | 36 | **100%** | 键面全覆盖（3 键效果受限见 §2） |
 | C OptionsWindow 键族 | 45 | 43 | **96%** | 仅 OnBoxDelete/OnFileRecovery 执行语义、映像链路 |
-| D 独立窗口功能 | 8（扣除 N-A） | 4 | **50%** | trace 窗口数据面（06 P2-1）、交互决策（06 P2-10）、压缩/导出组件、恢复 move/check |
-| E 向导 | 2（扣除 Setup N-A） | 0 | **0%** | 类型预设、浏览器模板生成 |
-| F 运维（映像/RAM/USB/addons/便携/多语言） | 2（扣除 N-A 6 项） | 1 | **50%** | USB 接管；便携布局已覆盖 |
-| **合计（CLI 语义宇宙）** | **125** | **104** | **≈83%** | （B/C 权重高是合理的：键面是 CLI 的天然形态） |
+| D 独立窗口功能 | 8（扣除 N-A） | 6 | **75%** | ~~trace 窗口数据面（06 P2-1）~~（✅ 波 D1）、~~恢复 move/check~~（波 9）、~~doctor/浏览器模板向导语义~~（波 D3 精简形态）；余交互决策（06 P2-10 后续）、压缩/导出 GUI 组件 |
+| E 向导 | 2（扣除 Setup N-A） | 2 | **100%** | ~~类型预设（波 B）、浏览器模板生成（波 D3 gen-browser）~~ 均已收口（CLI 等价形态） |
+| F 运维（映像/RAM/USB/addons/便携/多语言） | 2（扣除 N-A 6 项） | 2 | **100%** | ~~USB 接管~~ 已收口（波 D2 `usb sync/status`；映像/RAM 状态与挂载面同步 CLI 化，docs/04 §18） |
+| **合计（CLI 语义宇宙）** | **125** | **114** | **≈91%** | （B/C 权重高是合理的：键面是 CLI 的天然形态） |
 
-- **当前 ≈83%（区间 80–85%）**：读路径、写键面、生命周期显式命令（创建/删除/快照/恢复基础/
-  模板/日志/force/maint）均已稳定；缺口集中在 **SandMan 守护行为（07-P0-2）与操作工程化
-  （导出导入/预设/复制）** 两簇——前者是"server 作为常驻管理器"的定位缺口，后者是纯增量功能。
-- 完成 07-P0×2 + 07-P1×4（+P1-4 依赖的 06 P2-9）→ **≈92%**；再完成 06 P2-1/2/6/7/8/10 与
-  07-P2-1/2/3 → **≈97%**。剩余为 07-P2-4/5 与深水区（trace 栈符号化等），可长期搁置。
+- **当前 ≈91%（区间 89–93%）**（波 D1+D3 后更新）：读路径、写键面、生命周期显式命令、
+  trace 观测、诊断/模板生成/装卸/导出等操作工程化均已稳定；余量为交互决策协议
+  （06 P2-10）、模板 scan（06 P2-2）、外壳集成（不做，P2-8）与 GUI 深水区
+  （trace 栈符号化等 N-A）。处置全表：docs/04 §21.3。
 
 ### 5.2 建议波次划分
 
 | 波次 | 内容 | 规模合计 | 理由 |
 |---|---|---|---|
 | 波次 7：触发器与生命周期 | 07-P0-1（命令路径触发器）→ 07-P0-2（server 箱空监视+四行为）；顺带 `server status` 守护呈现 | 中 | **✅ 已完成（docs/04 §16 验收）**。修复"键可写但静默失效"的语义陷阱，最高优先 |
-| 波次 8：创建与复制体验 | 07-P1-1（--type 预设+常用旗标）、07-P1-4（duplicate）、06 P2-9 扩展（节 dump/节写入暴露）、07-P2-2（info 派生字段）、06 P2-3/P2-4 顺带 | 中 | **核心已完成的子集 ✅（07-P1-1/4 + 节整读/整写子能力，docs/04 §17）；07-P2-2 与 06 P2-3/4 及高级旗标仍待做** |
+| 波次 8：创建与复制体验 | 07-P1-1（--type 预设+常用旗标）、07-P1-4（duplicate）、06 P2-9 扩展（节 dump/节写入暴露）、07-P2-2（info 派生字段）、06 P2-3/P2-4 顺带 | 中 | **✅ 全部完成**：07-P1-1/4 + 节整读/整写（波 B，docs/04 §17）；07-P2-2 + 06 P2-3/4 + 高级旗标（--location/--temp/--v2-delete/--auto-recover/--block-net/--drop-admin）+ 06 P2-9 用户面 `box dump`/`cfg dump`（波 D3，docs/04 §19/§21） |
 | 波次 9：迁移与恢复增强 | 07-P1-2（export/import，先 --dir+zip store 形态）、07-P1-3（--move + --check） | 中-大 | **✅ 已完成（docs/04 §17 验收；zip 自研 store 读写器 + --move + 检查器缺省执行）** |
-| 波次 10：诊断与自动化 | 06 P2-1（trace）、06 P2-2（模板 scan）、07-P2-1（usb sync）、06 P2-6 全局形、06 P2-10（交互决策）、07-P2-3（伪命令验收） | 中 | 观测与自动化层；顺序可按用户反馈调 |
-| 搁置 | 07-P2-4（doctor，与无依赖约束冲突）、07-P2-5（浏览器模板探测）、06 P2-5/11/12/13/14、全部 N-A | — | 价值/成本比低或依赖外部决策 |
+| 波次 10：诊断与自动化 | ~~06 P2-1（trace）~~（✅ 波 D1 完成，docs/04 §20）、06 P2-2（模板 scan）、~~07-P2-1（usb sync）~~（✅ 波 D2 完成，docs/04 §18）、~~06 P2-6 全局形~~（✅ 波 D3 `--all`）、06 P2-10（交互决策）、~~07-P2-3（伪命令验收）~~（✅ 波 D3） | 中 | 剩余：06 P2-2（scan，后续独立波次）与 06 P2-10（iq 协议）——处置全表见 docs/04 §21.3 |
+| 搁置 | 07-P2-4（doctor，与无依赖约束冲突）、07-P2-5（浏览器模板探测）、06 P2-5/11/12/13/14、全部 N-A | — | ~~搁置~~ **波 D3 复议并收口**：doctor 做静态体检（无依赖冲突消除）、浏览器模板与 06 P2-5/12/13/14 全部实现；仅 06 P2-11（--drv-cache）维持不做（docs/04 §21.3） |
 
 ### 5.3 复核指引（本文全部关键判定的证据锚点）
 

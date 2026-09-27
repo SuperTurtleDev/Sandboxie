@@ -82,6 +82,12 @@ constexpr const char* kOpTplCheck  = "tpl.check";
 constexpr const char* kOpLogWatch  = "log.watch";
 constexpr const char* kOpLogDump   = "log.dump";
 constexpr const char* kOpLogEvent  = "log.event";   // server → 订阅连接推送
+// 波次 D1（docs/04 §20）：trace/资源监控面——trace.event 为 server → 订阅
+// 连接推送专用 op（对齐 log.event 先例）；trace.watch 订阅 / trace.dump
+// 取 server 环形缓冲近期条目（参数 last/box/type_code/pid）。
+constexpr const char* kOpTraceWatch = "trace.watch";
+constexpr const char* kOpTraceDump  = "trace.dump";
+constexpr const char* kOpTraceEvent = "trace.event";  // server-push-only
 // P1 清尾波次（docs/04 §15）：force 禁用强制运行（直驱动，无 SbieSvc）；
 // proc.killAll 参数化 box 可空 = 全局终止（P1-3，沿用 kOpProcKillAll）
 constexpr const char* kOpForceSet    = "force.set";
@@ -91,6 +97,17 @@ constexpr const char* kOpForceStatus = "force.status";
 constexpr const char* kOpBoxCopy   = "box.copy";
 constexpr const char* kOpBoxExport = "box.export";
 constexpr const char* kOpBoxImport = "box.import";
+// 波次 D2（docs/04 §18）：磁盘映像/RAM 盘/USB 沙箱运维域——img.*/ramdisk.*
+// 转发 SbieSvc MountManager（经 SvcProxy），usb.* 为配置面 + Win32 卷枚举。
+// 读语义 retry=true；img.create/mount/unmount 与 usb.sync 为写语义 retry=false。
+constexpr const char* kOpImgList   = "img.list";
+constexpr const char* kOpImgStatus = "img.status";
+constexpr const char* kOpImgCreate = "img.create";
+constexpr const char* kOpImgMount  = "img.mount";
+constexpr const char* kOpImgUnmount= "img.unmount";
+constexpr const char* kOpRamDiskStatus = "ramdisk.status";
+constexpr const char* kOpUsbStatus = "usb.status";
+constexpr const char* kOpUsbSync   = "usb.sync";
 
 // 会话级命名（00 §2-§4）
 std::wstring PipeName();     // \\.\pipe\SbieOSS_Cli_S<N>

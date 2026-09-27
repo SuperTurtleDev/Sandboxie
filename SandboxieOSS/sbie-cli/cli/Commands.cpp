@@ -556,6 +556,11 @@ std::map<std::string, std::map<std::string, CommandHandler>>& Commands()
     return reg;
 }
 
+// D3 波次注册入口（实现与全部 D3 注册项：cli\Commands\Commands_D3.cpp）
+void RegisterD3Commands();
+// D1 波次注册入口（实现与全部 D1 注册项：cli\Commands\Commands_D1.cpp）
+void RegisterD1Commands();
+
 void RegisterCommands()
 {
     auto& reg = Commands();
@@ -591,6 +596,17 @@ void RegisterCommands()
     // ---- P1 清尾波次（docs/04 §15；06 缺口表 P1-1/P1-2）----
     RegisterForceCommands();         // force on/off/status（直驱动 + server op）
     RegisterMaintCommands();         // maint status/start/stop（机器级，无 op）
+    // ---- 运维域波次 D2（docs/04 §18；磁盘映像/RAM 盘/USB 沙箱）----
+    RegisterDiskImageCommands();     // img list/status/create/mount/unmount +
+                                      //   ramdisk status（SbieSvc MountManager）
+    RegisterUsbCommands();           // usb status/sync（07-P2-1）
+    // ---- D1 波次（docs/04 §20；trace/资源监控面）----
+    RegisterD1Commands();            // trace watch/dump（06-P2-1 收口）
+    // ---- D3 波次（docs/04 §19；浏览器模板生成器 + P2 清单可实现项）----
+    RegisterD3Commands();            // template gen-browser / doctor /
+                                      //   box create-info-list-snapshot 增强 /
+                                      //   proc suspend-box / cfg whoami /
+                                      //   maint install/uninstall
 }
 
 } // namespace sbie::cli

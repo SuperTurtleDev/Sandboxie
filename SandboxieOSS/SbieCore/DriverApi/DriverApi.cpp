@@ -533,6 +533,56 @@ SbieStatus DisableForceProcess(ULONG* newState, ULONG* oldState)
     return FromNtStatus(rc);
 }
 
+// ---------------------------------------------------------------------------
+// 监控/trace（波 D1；02 §3.6/§7 坑 1——MONITOR_GET2 无 SbieDll 导出，Ioctl 直投）
+// ---------------------------------------------------------------------------
+
+SbieStatus MonitorControl(ULONG* newState, ULONG* oldState)
+{
+    if (!Loaded() && !LoadSbieDll())
+        return SbieStatus::ERR_SBIEDLL;
+    // 参数编排对齐 QSbieAPI CSbieAPI__MonitorControl（SbieAPI.cpp:2936-2952）
+    __declspec(align(8)) ULONG64 parms[API_NUM_ARGS];
+    API_MONITOR_CONTROL_ARGS* args = (API_MONITOR_CONTROL_ARGS*)parms;
+    memset(parms, 0, sizeof(parms));
+    args->func_code   = API_MONITOR_CONTROL;
+    args->set_flag.val = newState;
+    args->get_flag.val = oldState;
+    LONG rc = S().api.SbieApi_Ioctl(parms);
+    S().lastNt = rc;
+    return FromNtStatus(rc);
+}
+
+MonitorFetch MonitorGet2(void* buffer8Aligned, ULONG* bufferLen, bool* moreEntries)
+{
+    if (moreEntries)
+        *moreEntries = false;
+    if (!Loaded() && !LoadSbieDll())
+        return MonitorFetch::Error;
+    if (!buffer8Aligned || !bufferLen || *bufferLen == 0)
+        return MonitorFetch::Error;
+
+    __declspec(align(8)) ULONG64 parms[API_NUM_ARGS];
+    API_MONITOR_GET2_ARGS* args = (API_MONITOR_GET2_ARGS*)parms;
+    memset(parms, 0, sizeof(parms));
+    args->func_code    = API_MONITOR_GET2;
+    args->buffer_ptr.val = (WCHAR*)buffer8Aligned;
+    args->buffer_len.val = bufferLen;
+    LONG rc = S().api.SbieApi_Ioctl(parms);
+    S().lastNt = rc;
+    // 驱动端在入口即清零 *buffer_len，任何失败路径下均无部分写入可解析
+    if (rc == 0 || rc == 0x00000105L /*STATUS_MORE_ENTRIES*/) {
+        if (moreEntries)
+            *moreEntries = (rc == 0x00000105L);
+        return MonitorFetch::Ok;
+    }
+    if ((unsigned long)rc == 0x8000001AUL /*STATUS_NO_MORE_ENTRIES*/)
+        return MonitorFetch::Empty;
+    if ((unsigned long)rc == 0xC00000A3UL /*STATUS_DEVICE_NOT_READY*/)
+        return MonitorFetch::NotEnabled;
+    return MonitorFetch::Error;
+}
+
 SbieStatus GetHomePath(std::wstring* ntPath, std::wstring* dosPath)
 {
     if (!Loaded() && !LoadSbieDll())

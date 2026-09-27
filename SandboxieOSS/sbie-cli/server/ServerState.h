@@ -28,6 +28,8 @@ struct Connection {
     ULONG clientPid = 0;
     ULONG clientSession = 0;
     bool logSubscriber = false;   // log.watch 成功后置位
+    bool traceSubscriber = false; // trace.watch 成功后置位（波 D1，04 §20；
+                                  //   同样把工作线程切到订阅者轮询模式）
 
     explicit Connection(HANDLE h) : pipe(h) {}
 
@@ -73,6 +75,13 @@ public:
     void SetLogPumpActive(bool on) { logPumpActive_.store(on); }
     bool LogPumpActive() const { return logPumpActive_.load(); }
 
+    // trace 订阅（TracePump 推送目标快照；波 D1）
+    void AddTraceSubscriber(const std::shared_ptr<Connection>& c);
+    std::vector<std::shared_ptr<Connection>> TraceSubscribers();
+
+    void SetTracePumpActive(bool on) { tracePumpActive_.store(on); }
+    bool TracePumpActive() const { return tracePumpActive_.load(); }
+
 private:
     ServerState() = default;
 
@@ -80,6 +89,7 @@ private:
     HANDLE stopEvent_ = nullptr;
     std::atomic<bool> stopping_{ false };
     std::atomic<bool> logPumpActive_{ false };
+    std::atomic<bool> tracePumpActive_{ false };
     ULONG session_ = 0;
     DWORD pid_ = 0;
     ULONG idleTimeoutSec_ = 0;
@@ -87,6 +97,7 @@ private:
     ULONGLONG idleDeadlineTick_ = 0;   // 最后一个客户端断开后 armed
     std::vector<std::shared_ptr<Connection>> conns_;
     std::vector<std::shared_ptr<Connection>> subs_;
+    std::vector<std::shared_ptr<Connection>> traceSubs_;
 };
 
 } // namespace sbie::server

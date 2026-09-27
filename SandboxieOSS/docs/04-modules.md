@@ -262,15 +262,25 @@ constexpr uint32_t kIpcMagic = 0x53424F53;  // 'SBOS'
 ```
 sbie status / version
 sbie server  start|stop|status
-sbie box     list|info|create|delete|rename|enable|disable|set|get|list-setting|
-             clean|size|recover (list|copy|add)|snapshot (list|take|remove|select|set-info|info)
-sbie proc    list|info|start|kill|kill-all (<box>|--all)|suspend|resume
-sbie cfg     get|set|unset|list-setting|reload|path|lock|unlock
-sbie template list|info|apply|revoke|check
+sbie box     list [--type <t>]|info|create [--type <t>] [--location <dir>] [--temp]|
+             [--v2-delete] [--auto-recover] [--block-net] [--drop-admin]|
+             delete|rename|enable|disable|set|get|list-setting|clean|size|
+             dump <name>|explore <name>|recover (list|copy|add)|
+             snapshot (list|take|remove|select|set-info|info|default)
+sbie proc    list|info|start|kill|kill-all (<box>|--all)|suspend|resume|
+             suspend-box|resume-box (<box>|--all)|exempt <pid> <on|off|get>
+sbie cfg     get|set|unset|list-setting|reload|path|lock|unlock|whoami|dump [<section>]
+sbie template list|info|apply|revoke|check|gen-browser
 sbie log     watch|dump
+sbie trace   watch|dump
 sbie force   on [<seconds>]|off|status
-sbie maint   status|start|stop [--driver|--service|--all]
+sbie maint   status|start|stop|install|uninstall [--driver|--service|--all]
+sbie img     list|status [<box>]|create <box> --size-mb <N>|mount <box>|unmount <box>
+sbie ramdisk status
+sbie usb     status|sync [--dry-run]
+sbie doctor
 ```
+（D1/D3 波次命令详表：trace §20、box/proc/cfg/template/maint/doctor 增强与新命令 §19）
 
 每命令规格如下。`--json` 时 "输出" 列的表格数据改为 §7 的 JSON 对象数组；退出码列仅列
 特异值，通用失败见 §6。所有命令共有的错误：`3`（驱动不可用，读类）、`4`（server 不可用
@@ -375,11 +385,38 @@ sbie maint   status|start|stop [--driver|--service|--all]
 唯 ForceDisableSeconds 写经 SbieSvc（同 `cfg set` 写路径）。maint 为机器级组件操作，
 只在显式命令时执行（server 启动路径不做任何组件启停）。
 
+### 4.9 img / ramdisk / usb（运维域波次 D2，04 §18）
+
+| 命令 | 参数 | ipc op | 语义 | 输出 | 退出码 |
+|---|---|---|---|---|---|
+| `sbie img list` | — | `img.list` | SbieSvc MountManager 已挂载根枚举（IMBOX_ENUM；ImDisk 缺席 → 3） | 表：REG_ROOT | 0；3 |
+| `sbie img status [<box>]` | `[<box>]` | `img.status` | 键面（UseFileImage/UseRamDisk/ConfidentialBox/EnableEFS/ForceProtectionOnMount）+ 镜像文件（`<FileRoot>.box` 存在性/大小）+ 挂载状态（IMBOX_QUERY；ImDisk 缺席 → "unknown"）聚合；带 box=单箱键值行，缺省=全箱表 | 键值行/表 | 0；5 |
+| `sbie img create <box>` | `--size-mb <N>`(≥256) `[--password <pw>]`(AES) | `img.create` | IMBOX_CREATE：SbieSvc→ImBox 挂载-格式化-卸载，产物 `<FileRoot>.box` | `image created for box 'X' (N MB[, AES])` | 0；3；5；7 |
+| `sbie img mount <box>` | `[--password <pw>]` `[--protect\|--no-protect]` `[--admin-only\|--no-admin-only]` `[--auto-unmount]` | `img.mount` | IMBOX_MOUNT：显式挂载 + FileRoot junction；--protect 缺省 = ForceProtectionOnMount 键，admin_only 缺省 = ProtectAdminOnly 键；加密箱必须显式 mount（自动路径不传口令） | `box 'X' image mounted` | 0；3；4；5 |
+| `sbie img unmount <box>` | — | `img.unmount` | IMBOX_UNMOUNT（未挂载=幂等成功） | `box 'X' image unmounted` | 0；4 |
+| `sbie ramdisk status` | — | `ramdisk.status` | 全局 RamDiskSizeKb（<100MB 标记拒挂）/RamDiskLetter + UseRamDisk=y 箱 + 共享盘 QUERY（空 reg_root） | 键值行 | 0 |
+| `sbie usb status` | — | `usb.status` | ForceUsbDrives/UsbSandbox(缺省 USB_Box)/DisabledForceVolume/现 ForceFolder + 卷表（SN `HHHH-LLLL`/卷标/挂载点/USB 总线/是否接管；BusType=Usb 直查，非 SetupAPI） | 头四行 + 表：SERIAL/LABEL/MOUNTS/USB/TAKEN | 0 |
+| `sbie usb sync` | `[--dry-run]` `[--password <pw>]` | `usb.sync` | 07-P2-1 一次性接管：枚举 USB 卷→建 UsbSandbox 箱（缺三键 UseFileDeleteV2/UseRegDeleteV2/UseVolumeSerialNumbers 幂等补 y）→ ForceFolder 整表替换（多写序列末条 refresh 提交，§8.4）；ForceUsbDrives=n 拒绝 | 摘要行 + 表：FORCE_FOLDER | 0；4；7 |
+
+注：`box set UseFileImage=y / UseRamDisk=y` 写键即生效——SbieSvc 在箱内首进程
+注入路径自动挂载/卸载（AcquireBoxRoot，04 §18.1），img mount/unmount 是显式面
+（加密箱口令场景必需）。ImDisk 驱动与 ImBox.exe 属 SandboxieTools 运行时：缺席时
+create/mount 报 3，status 呈现 "unknown (ImDisk driver not available)"。
+
 ## 5. 降级直连适用表（无 server 时 client 自行执行）
 
 | 可降级 | 不可降级（必须拉起 server） |
 |---|---|
 | `status`、`version`、`box list/info/get/list-setting`、`proc list`、`cfg get/list-setting`、`template list/info/check`（读驱动缓存即可的部分）；`force on/off/status`（P1 清尾波次：开关=直驱动 ioctl，on 的 ForceDisableSeconds 写在直连路径经进程内 SvcClient，§15） | 一切 SbieSvc 写操作（`box create/set/rename/delete`、`cfg set/unset/reload?/lock/unlock`、`template apply/revoke`）、`proc start/kill*`、`cfg path`、`log watch/dump`（需 leader） |
+
+`img list/status`、`ramdisk status`、`usb status`（读：键面走驱动缓存，ImBox QUERY 经进程内 SvcClient；04 §18）
+
+D1/D3 波次（04 §19/§20）：`trace watch/dump`（订阅被拒或 --no-server 时降级
+直连自拉 API_MONITOR_GET2，§20；注意排空式读取——server 泵与直连 watch 不可
+同时读同会话环）、`box dump`、`cfg dump`、`cfg whoami`、`doctor`、`box explore`、
+`template gen-browser`（探测纯读；写走 SbieSvc）、`proc suspend-box/resume-box/
+exempt`、`maint install/uninstall`、`box snapshot default`、`box create 高级旗标`
+（SbieSvc 直连）均为可降级/恒直执形态。
 
 （`cfg reload` 走 SbieApi_ReloadConf 直连驱动，可降级；但它同时是 SbieSvc refresh 的一部分，
 两路径一致。`maint status/start/stop` 无 IPC op——机器级操作，client 本地恒直执。）
@@ -1853,3 +1890,398 @@ DefaultBox/New_Box；ini 仅原四节 + 无任何 T_/OssRecT/OnFileRecovery 测�
 5. **前任遗留现场教训**（流程性）：未实测的格式化代码（zip 二进制布局）
    不能视为完成；本波次两处 bug 均为"写完未验"的典型（第三方解压器一验
    即暴露）。已记入本节供后续波次自检。
+
+## 18. 验收记录（波次 D2：磁盘映像 / RAM 盘 / USB 沙箱运维域，2026-09-27）
+
+对应 07 报告运维域条目：07-P2-1（USB 沙箱自动接管）、07-N-A-7（RAM 盘）、
+07-N-A-8/06 N-A-1（磁盘映像加密箱）与 EnableEFS 键（07 §2 表）。规格锚点
+见 docs/07-deep-gap-analysis.md 对应行（SandMan 来源行号在那里）。
+
+### 18.1 可行性核实结论（决定实现形态，写键即生效 vs pipe 面）
+
+实读 Sandboxie core（GPLv3）后的执行者定位（07 §2 表旁注同步更新）：
+
+1. **UseFileImage / UseRamDisk 的自动挂载执行者在 SbieSvc core**：
+   `core/svc/DriverAssistInject.cpp:160` 在每个沙箱进程注入路径调用
+   `MountManager::AcquireBoxRoot`（`core/svc/MountManager.cpp:1081-1213`）——
+   读箱键 `UseFileImage`/`UseRamDisk`；RAM 盘用全局 `RamDiskSizeKb`（下限
+   100MB，低于则记日志 2238 拒挂）+ `RamDiskLetter`（空=自动分配），
+   **共享单盘**（m_RamDisk，盘内每箱一个 `<boxname>` 目录）；映像箱用
+   `<FileRootPath DOS>.box`（GetImageFileName，:1066-1073）。挂载由 SbieSvc
+   以子进程拉起安装目录 `ImBox.exe`（SandboxieTools 运行时；SbieSvc 侧组
+   `ImBox type=ram|img image=… cipher=AES size=… mount=<盘符> format=ntfs
+   proxy=…!… event=… mem=<ptr>`——命令行格式仅按任务书授权参考其源码，
+   未拷任何代码），再把 FileRoot 变为指向 `\Device\ImDiskN\Sandbox`（RAM
+   盘为 `\Device\ImDiskN\<boxname>`）的 junction。**结论：`box set
+   UseFileImage=y` 写键即生效（下一次箱内首进程启动自动挂载），CLI 不在
+   启动路径上做任何事。**
+2. **显式挂载/卸载/枚举/查询在 SbieSvc 有完备 pipe 面**：
+   `MSGID_IMBOX_CREATE/MOUNT/UNMOUNT/ENUM/QUERY/UPDATE`（0x1D01-0x1D06，
+   `core/svc/MountManager.cpp` Handler，挂在与 SBIE_INI 相同的
+   `\RPC Control\SbieSvcPort` LPC 端口；QSbieAPI 的 ImBoxCreate/ImBoxMount/
+   ImBoxUnmount/ImBoxEnum 即此协议的 LGPL 侧实现）。守卫仅拒绝沙箱内调用
+   者（`SbieApi_QueryProcess` 成功即拒）。**结论：CLI 经既有 SvcClient 直
+   达，无需 ImBox.exe 子进程封装、无需加载 sbiedll.dll 的 SbieDll_Mount
+   导出。**注意：该组回复 status 为 **win32 错误码**（SHORT_REPLY(ERROR_*)
+   惯例，与 SBIE_INI 的 NTSTATUS 不同）——SvcClient::ImBox* 实现按高位
+   区分（0xC000xxxx=NTSTATUS，否则按 win32 映射：ERROR_DEVICE_NOT_AVAILABLE
+   →DRIVER_UNAVAILABLE=ImDisk 缺席、ERROR_NOT_FOUND→NOT_FOUND=未挂载）。
+   **vendor/MountManagerWire.h 本波次新增**（01-license-map §2 本就允许
+   复制的 GPLv3 wire 头，逐字未改 + 适配头；03 §7 原"许可证禁用不做"的
+   记述对这组 msgid 不成立——协议与编排全在 core，仅运行时组件在
+   SandboxieTools，已在本节纠正）。
+3. **EnableEFS 纯键驱动**：SbieDll 在沙箱进程内代理 EFS 属性文件打开
+   （`core/dll/file.c:4735-4781` File_NtCreateFileProxy，队列
+   `*USERPROXY_%08X`）→ SbieSvc `UserServer::OpenFile` 查箱键
+   `EnableEFS`（`core/svc/UserServer.cpp:642`）放行宿主侧打开（EFS 需用户
+   profile 密钥，故必须由用户态服务代开）。**结论：无 CLI 触发面/状态机，
+   状态呈现并入 `img status`（enable_efs 字段）。**
+4. **USB 接管（07-P2-1）**：SandMan 侧守护行为（UpdateForceUSB，
+   `SandMan.cpp:2272-2321`，custom license——本波次仅按 07 已记录的规格
+   语义实现，未参考其代码）：ForceUsbDrives=y 时枚举 USBSTOR 卷（卷序列
+   号 `HHHH-LLLL` 为标识），未被 DisabledForceVolume 排除的卷的挂载点
+   整表写入 UsbSandbox 箱的 ForceFolder；箱不存在则创建并设
+   UseFileDeleteV2/UseRegDeleteV2/UseVolumeSerialNumbers 三键。**CLI 等价
+   形态 = `usb sync` 一次性命令**（守护形态为可选后续：挂 server 周期任务
+   或计划任务调用本命令）。
+   **卷枚举实现决策**：不用 SetupAPI 枚举 USBSTOR 枚举器（SandMan 路径），
+   改为对每个卷设备发 `IOCTL_STORAGE_QUERY_PROPERTY` 查 BusType==BusTypeUsb
+   （纯 kernel32：FindFirstVolumeW + GetVolumePathNamesForVolumeNameW +
+   GetVolumeInformationW），零新依赖；语义覆盖更宽（UASP 等 USB 附加 SCSI
+   总线亦计入；USBSTOR 枚举器只覆盖传统 BOT）。总线查询失败的卷（无介质
+   等）标 bus_known=false 不计入接管、状态面如实呈现。
+
+### 18.2 命令面与 op（本波次新增）
+
+```
+sbie img    list                          已挂载根枚举（IMBOX_ENUM）            [img.list]
+            status [<box>]                键面+镜像文件+挂载状态聚合（单箱键值/  [img.status]
+                                          全箱表）
+            create <box> --size-mb <N>    创建镜像（IMBOX_CREATE；下限 256MB，  [img.create]
+                [--password <pw>]         口令=AES；走 SbieSvc→ImBox 格式化周期）
+            mount <box> [--password <pw>] 显式挂载（IMBOX_MOUNT；              [img.mount]
+                [--protect|--no-protect]  --protect 缺省=ForceProtectionOnMount
+                [--admin-only|--no-admin-only]    键；--auto-unmount=空箱自动卸载）
+                [--auto-unmount]
+            unmount <box>                 显式卸载（IMBOX_UNMOUNT，幂等）        [img.unmount]
+sbie ramdisk status                       RamDiskSizeKb/Letter + 使用箱 + 共享  [ramdisk.status]
+                                          盘挂载状态（空 reg_root QUERY）
+sbie usb    status                        ForceUsbDrives/UsbSandbox/            [usb.status]
+                                          DisabledForceVolume/现 ForceFolder +
+                                          卷表（SN/卷标/挂载点/USB/是否接管）
+            sync [--dry-run]              07-P2-1 一次性接管（见 18.1.4）        [usb.sync]
+```
+
+文件与 op：`SbieCore/Model/DiskImage.{h,cpp}`（img+ramdisk 领域）、
+`SbieCore/Model/UsbSandbox.{h,cpp}`（卷枚举+接管）、`vendor/MountManagerWire.h`、
+`SvcClient::ImBoxCreate/ImBoxMount/ImBoxUnmount/ImBoxEnum/ImBoxQuery`（便捷层，
+additive）、`cli/Commands/disk_img_cmd.cpp`、`cli/Commands/usb_cmd.cpp`、
+Dispatcher `HImgList/HImgStatus/HImgCreate/HImgMount/HImgUnmount/HRamDiskStatus/
+HUsbStatus/HUsbSync`（ImBox 调用经 SvcProxy 专职线程，03 §1）。读 op
+（img.list/status、ramdisk.status、usb.status）retry=true 可降级直连；写 op
+（img.create/mount/unmount、usb.sync）retry=false 不降级。§4 命令树、§5 降级
+表、PrintUsage 同步更新。
+
+### 18.3 实测（本机真实驱动/SbieSvc/ImDisk/ImBox.exe 全在场；`--show-transport` 确认 ipc）
+
+1. **只读状态面（IPC + 直连双路径）**：
+   - `img list` → `no mounted roots`（真实 IMBOX_ENUM 往返，rc 0）；
+   - `img status` 全箱表 / `img status DefaultBox` 单箱键值（image_file=
+     `C:\Sandbox\Administrator\DefaultBox.box`、mounted=no）；
+   - `ramdisk status` → 未配置/未挂载（QUERY 空 reg_root 回 NOT_FOUND 的
+     正确折叠，known=true mounted=no）；
+   - `usb status` → 5 卷枚举与 PowerShell Get-CimInstance Win32_Volume 逐卷
+     对拍一致（C:=549F-03CD、D:/E:=CF5B-E55D CD-ROM、两无盘符系统卷；
+     均非 USB 总线，TAKEN=no）；
+   - `--no-server` 直连路径同数据。
+2. **参数错误路径**：img create 缺 --size-mb / 100MB → 7（两条消息分立）；
+   img create/mount/status 不存在箱 → 5；usb sync（含 --dry-run）在
+   ForceUsbDrives=n → 7 + 开键提示。
+3. **usb sync 写路径（临时键全还原）**：设 `ForceUsbDrives=y` +
+   `UsbSandbox=D2TestBox` → dry-run（0/0）→ 实跑：自动建箱（Enabled=y）+
+   三初始键 + 空 ForceFolder（整体删除语义）→ 回读 box get/list-setting
+   全部落盘正确 → `box delete D2TestBox` + 两 cfg unset 还原（cfg get 复核
+   NOT_FOUND）。本机无 USB 卷，**非空 ForceFolder 写入路径（Set 首值+Append
+   余值）未实测**——与 box set --append 同一 ConfigStore 通道，逻辑同源。
+4. **img create/mount/unmount 真实全周期（临时箱，测后彻底还原）**——
+   安全评估：空箱无进程、protect 关（不触 API_PROTECT_ROOT 驱动态）、
+   ImDisk 驱动在场且健康（sc query imdisk=RUNNING）：
+   - `img create D2ImgBox --size-mb 300` → 产物 `C:\Sandbox\Administrator\
+     D2ImgBox.box` 恰 314,572,800 字节（SbieSvc→ImBox.exe 挂载-格式化-卸载
+     周期真实执行）；
+   - `img mount D2ImgBox` → junction `D2ImgBox [\Device\ImDisk0\Sandbox]`
+     （dir 实证）；`img status` mounted=yes；`--json` 给出 mount 明细
+     （disk_root=\Device\ImDisk0、disk_size=314570752、used_size=9371648）；
+     `img list` 列出 `\REGISTRY\USER\Sandbox_Administrator_D2ImgBox`；
+   - `img unmount D2ImgBox` → 卸载干净（img list 空、junction 消失、
+     mounted=no、image_exists 保留）；
+   - 还原：`box delete D2ImgBox`（节）+ 删 .box 文件；box list/img list/
+     目录列表复核无残留。
+5. **不可测项（明示）**：
+   - **口令（AES）路径**：create --password + mount --password 未做真实
+     加密镜像往返（wire 通道与无口令路径完全相同，仅 password 字段差异；
+     口令错误映射 ERR_WRONG_PASSWORD→日志 2243 由 SbieSvc 侧产生）；
+   - **--protect/--admin-only**：触发驱动 API_PROTECT_ROOT 全局保护态，本机
+     SbieSvc 在服务系统，不做（键参数接线已核，缺省=false 不触）；
+   - **--auto-unmount**：需箱内进程起止周期驱动（AcquireBoxRoot/ReleaseBoxRoot
+     联动），形态上等价于"空箱守护"波 A 已验收的轮询域，未单独实测；
+   - **UseRamDisk 真实挂载**：需写全局 RamDiskSizeKb 并起 RAM 盘箱进程（吃
+     内存且常驻），QUERY 状态面已实测（未配置态），挂载执行链与 UseFileImage
+     同源（MountManager 同一 MountImDisk），标注环境未测；
+   - **usb sync 非空 ForceFolder**（见 18.3.3）；**UASP/BOT 差异**：本机无
+     USB 存储设备，BusType 判定只验证了"非 USB 卷正确排除"的方向。
+6. **坑记录**：
+   - `GetVolumePathNamesForVolumeNameW` 的 lpcchReturnLength **不可为 NULL**
+     （传 NULL 静默失败→挂载点恒空；实测发现，修复后与系统卷清单对拍）；
+   - ImBox 组回复 status 为 win32 错误码（见 18.1.2），FromNtStatus 会全部
+     折叠为 GENERIC——SvcClient 侧显式双轨映射；
+   - IMBOX_CREATE/MOUNT_REQ 的 file_root 声明为 [1] 的变长尾区：定长安全
+     函数（wcscpy_s）按声明尺寸 [1] 必失败，须 memcpy 到 calloc 全长区
+     （QSbieAPI 用裸 wcscpy 同理）；
+   - usb sync 多键写序列的落盘语义：SbieSvc refresh=false 只改内存树，
+     **末条写必须 refresh=true** 提交（§8.4 坑的波 D2 应用实例）。
+
+### 18.4 遗留
+
+1. **usb sync 的守护形态**（周期自动接管）未做——一次性命令已覆盖语义，
+   常驻化建议挂 server Guardian 域后续扩展（需盘符变更通知
+   WM_DEVICECHANGE，server 无窗口）或用户计划任务。
+2. **img 镜像口令变更/扩容**（IMBOX_UPDATE）SbieSvc 侧本身未实现
+   （MountManager.cpp UpdateHandler 返回 ERROR_CALL_NOT_IMPLEMENTED），
+   CLI 不暴露。
+3. **ConfidentialBox/LessConfidentialBox** 仅状态呈现（键面生效者为
+   SbieDll），建箱预设的 Confidential 类型仍按 07-P1-1 决策（映像链路许可
+   证域）不含于 `box create --type`——但本波次已证明挂载链路核心侧可用，
+   后续可复议加回 `--type confidential`。
+4. **ramdisk status 的 boxes 列**：IPC 路径渲染为逗号连接串（JSON 原生数组），
+   直连路径同语义（跨传输字段形态一致性按 §7.2 snake_case 契约不破）。
+
+
+---
+
+## 19. 波次 D3：P2 收口命令面（07-P2-2..5 + 06 P2-3..14 剩余项）
+
+对应缺口：07-P2-2（箱类型派生）、07-P2-3（Start.exe 伪命令路由）、07-P2-4
+（doctor 精简版）、07-P2-5（浏览器兼容模板生成器）、06 P2-3（快照默认标记）、
+P2-4（空置/初始化状态）、P2-5（proc info 派生列）、P2-6（箱级挂起/恢复含
+--all）、P2-7（组件装卸）、P2-9（节全量导出用户面）、P2-12（cfg whoami）、
+P2-13（box explore）、P2-14（proc exempt）。处置全表见 §21.3。
+
+### 19.1 命令面（本波次新增/覆盖增强）
+
+```
+sbie box    create <name> [--location <dir>]   高级旗标（无旗标=原 IPC 路径；  [无 op——SbieSvc 直连]
+            [--temp] [--v2-delete]             有旗标时纯 client 键面写）
+            [--auto-recover] [--block-net]
+            [--drop-admin] [--type <t>]...
+            info <name>                        +type(七类派生)/never_delete/   [box.info+本地补列]
+                                               auto_delete/empty/initialized
+            list [--type <t>]                  按派生类型过滤                   [本地派生过滤]
+            snapshot default <box> [<id>|--clear]  [Current] Default 读写       [无 op——文件直写]
+            dump <name>                        原始节全量导出（ini 片段形态）  [无 op——驱动缓存读]
+            explore <name>                     宿主 explorer 打开 FileRoot     [无 op——ShellExecute]
+sbie proc    suspend-box <box>|--all           箱级整体挂起（SvcClient          [无 op——SbieSvc 直连]
+            resume-box  <box>|--all            SuspendResumeAll 接线）
+            info <pid>                         +flags_decoded/image_type/       [proc.info+本地补列]
+                                               elevated/wow64
+            exempt <pid> <on|off|get>          API_PROCESS_EXEMPTION_CONTROL   [无 op——ioctl 直投]
+            [--what internet|spooler]          直投（'inet'/'splr'）
+            start <box> default_browser|...    Start.exe 伪命令路由（改写为     [原 proc.start op]
+            ...（伪关键字）                     "Start.exe <pseudo>" 后转发）
+sbie cfg     whoami                            SbieSvc IniGetUser 三元组+节存在 [无 op——SbieSvc 直连]
+            dump [<section>]                   无参=节清单；给节名=原始节导出  [无 op——驱动缓存读]
+sbie template gen-browser [--browser <name>]   探测+生成 [Template_Local_*]；   [无 op——SbieSvc 直连]
+            [--access <a,b,...>] [--no-force]  缺省 dry-run
+            [--box <NAME> --install|--remove]
+sbie maint   install [--driver|--service|--all]  KmdUtil install（参数优先取    [无 op——KmdUtil 子进程]
+            [--image <path>]                     注册表先前值）
+            uninstall [--driver|--service|--all] 读回显注册参数→停→KmdUtil    [无 op——KmdUtil 子进程]
+                                               delete
+sbie doctor                                   只读体检（§19.2）                [无 op——本机直查]
+```
+
+### 19.2 关键语义决策
+
+1. **类型派生（07-P2-2）**：Hardened=UseSecurityMode（+Plus=叠加
+   UsePrivacyMode）、Compartment=NoSecurityIsolation、Insecure=
+   UnsecureDebugging、Private=UseFileImage+ConfidentialBox；输出用波 B
+   预设名（hardening/hardened-plus/standard/standard-plus/app/app-plus/
+   insecure/private）。读生效视图（含模板回退）。
+2. **gen-browser（07-P2-5）**：探测=注册表 App Paths（HKLM 64/32 视图+
+   HKCU）→ 标准安装目录 → 用户数据目录（Chromium 系 User Data\Default→
+   首个 "Profile *"→根兜底；Gecko 系 Profiles\* 通配形）。命中
+   %LocalAppData%/%AppData% 根时变量化为 "%Local App Data%"/"%AppData%"
+   （drv conf_expand.c 两种写法都展开）。键面=GPL Templates.ini 浏览器族
+   形态（Tmpl.Title/Tmpl.Class=WebBrowser/ForceProcess=<exe>/
+   OpenFilePath=<exe>,<profile>\模式）；访问类别 bookmarks|history|cookies|
+   passwords|preferences|profile（按引擎分档）。写入=SbieSvc 整节替换
+   （setting 空+value=整节文本，04 §8.15）+ box 节 Append Template=。
+   SandMan 源码未读未复制（07 §3.3 记录的行为规格 + GPL ini 键面形态）。
+3. **doctor（07-P2-4）**：JS 诊断树与"无第三方依赖"冲突 → 静态体检清单
+   （sbiedll/abi、driver/svc 服务+设备交叉核证、安装布局、ini 定位、
+   配置锁、FileRootPath 盘符、DefaultBox、箱清单+FileRootPath 冲突+
+   守护键、server 连接）。全只读；退出码 0/1（有 FAIL=1）。
+4. **proc start 伪命令（07-P2-3）**：实测发现裸转发不可用——Start.exe
+   直投 CreateProcess 对伪串必然 GENERIC（core start.cpp:432-438），
+   伪命令必须经 Start.exe 自身解释。首命令 token 命中
+   default_browser/mail_agent/run_dialog/auto_run 时改写为
+   "Start.exe <pseudo>" 再走原实现。
+5. **box dump/cfg dump（06 P2-9）**：原始节读=QueryConf 直投
+   NO_TEMPLS|NO_EXPAND|**NO_GLOBAL**——不加 NO_GLOBAL 时多值键在本节值
+   耗尽后并进 GlobalSettings 同名键值（core conf.c:1549-1556 check_global
+   回退；实测 [TestOss] 的 Template= 会混入全局模板 8 行），"原始节"语义
+   要求关掉。坑：驱动节枚举（Conf_Get_Setting_Name，conf.c:1379-1382）恒
+   跳过 GlobalSettings——cfg dump 节清单显式补该项。输出=ini 片段形态
+   （"[节名]"+Key=Value 行，可直接重定向备份/diff）；--json=
+   {section,count,lines:[{key,value}…]}。
+6. **快照默认标记（06 P2-3）**：Snapshots.ini [Current] Default=<id> 行级
+   改写（UTF-8 无 BOM，与 SnapshotManager::SaveIniFile 同形态——
+   WritePrivateProfileStringW 的 ANSI 往返会破坏非 ASCII 快照名）。
+
+## 20. 波次 D1：trace/监控命令面（06 P2-1 收口）
+
+数据通路三层（全部已实测）：
+- **DriverApi**：`MonitorControl`（API_MONITOR_CONTROL，SbieDll 导出经
+  绑定表）+ `MonitorGet2`（**API_MONITOR_GET2 无 SbieDll 包装导出**——02
+  §7 坑 1，经 SbieApi_Ioctl 直投 API_MONITOR_GET2_ARGS{buffer_ptr,
+  buffer_len}；rc=0x105=STATUS_MORE_ENTRIES 积压未尽、0x8000001A=空环、
+  0xC00000A3=监控未开）。
+- **Model/Monitor**：GET2 缓冲布局解码（[ULONG size][记录体]…以 0 结尾；
+  记录体=[时间戳 8][type 4][pid 4][tid 4][若干 \0 结尾串][可选 0xFFFF 栈
+  标签区]）；串段语义 [0]=name/[1]=message/[2]=subtype（对齐 QSbieAPI
+  CTraceEntry）；类型缩写/状态文本（disposition/trace/user 位）；pid→box
+  解析（含负缓存）；MonitorDirectSession（直连自拉：启监控→拉尽→仅关回
+  自开者）。
+- **server/TracePump**：常驻泵（独立于 LogPump——事件源/启停前置/订阅集
+  全不同）；环形缓冲 8196 条（trace.dump 数据源）→ {"op":"trace.event"}
+  帧推送 trace.watch 订阅连接（复用 Connection::EnqueuePush 推送框架）。
+
+```
+sbie trace watch [--box <名>] [--type <缩写>]   实时流；Ctrl+C 退出 0。IPC 优先 [trace.watch 订阅]
+             [--pid <pid>] [--json]             （server TracePump 推送）；缺席/   +直连 MonitorDirectSession
+             [--no-server 全局旗标]             被拒/--no-server → 直连自拉       降级
+sbie trace dump [--last N=100] [--box] [--type] 近期条目（server 环形缓冲，     [trace.dump]
+             [--pid] [--json]                   服务端过滤）；直连降级=当次拉尽
+```
+
+过滤参数两侧一致：--box（未知 box "-" 不匹配显式过滤）/--type（缩写表
+apicall..debug 共 18 类+别名）/--pid。行格式 `[hh:mm:ss] <类型>[/.子类型]
+[ (U)] <status> <pid> <box> <值>`；--json=NDJSON（watch 每行一对象；dump
+为 {count,entries} 包络）。
+
+### 20.4 监控类型覆盖清单
+
+`Model::MonitorTypeName` 覆盖 core api_flags.h 全部 18 个 MONITOR_* 类型码：
+ApiCall/SysCall/Pipe/Ipc/Rpc/WinClass/Drive/ComClass/RtClass/Ignore/Image/
+File/Key/Socket(NETFW)/Dns/Scm/Hook/Debug(OTHER)；未知码 → "Unknown"。
+disposition 位（open/closed）+ MONITOR_TRACE（trace）+ MONITOR_USER
+（" (U)" 用户态来源）按条渲染；MONITOR_SYSCALL 的串段[2]（系统调用名）
+并入 message（CTraceEntry 同款）。0xFFFF 栈标签区不解码（MonitorStackTrace
+=y 时才有，符号化属 GUI 深水区，07-N-A-12 维持 N-A）。
+
+坑记录：**API_MONITOR_GET2 是排空式读取**（驱动端逐条 pop）——server 泵与
+直连 watch 不可同时读同会话环（条目会被瓜分）；--no-server 用于 server
+停止时的直连形态。监控环按 Windows 会话隔离（写入侧 Session_Get(-1)、读取
+侧=调用方会话），同会话即全集，无二次过滤。
+
+## 21. 验收记录（波次 D1+D3：trace 命令组 + P2 收口，2026-09-27）
+
+接手审计结论：前任因配额中断时 D1（DriverApi 监控绑定/Monitor 模块/
+trace_cmd/TracePump/Dispatcher op/注册接线）与 D3（TemplateGen/gen-browser/
+doctor/box_d3/proc_d3/maint_d3）**代码已全部在位**且首次构建即 0 error
+（/W4/WX）；本波次接手补齐：06 P2-9 用户面（box dump/cfg dump，含两处
+实测发现的坑修复，§19.2.5）、全量实测、docs 登记。
+
+### 21.1 D1 实测（真实驱动/SbieSvc；server pid 在场 + --no-server 两形态）
+
+1. **server 订阅路径**：`trace watch`（transport: ipc 订阅）+ TestOss 内
+   `cmd /c "echo … > C:\x & reg query …"` → 151-257 条（File 19-124/Key
+   28-76/SysCall），box=TestOss、pid、[hh:mm:ss] 均正确解析。
+2. **过滤逐一验证**：`--type file`→32 条全 File；`--type key`→80 条全 Key；
+   `--type syscall`→7 条全 SysCall；`--box TestOss --type file`→65 条全
+   File；`--pid <活跃 pid>`→525 条全属该 pid（同窗未过滤流 2048 条含
+   干扰进程）。`--type bogus`/`--last 0`→USAGE rc2。
+3. **直连路径**：server stop 后 `--no-server trace watch
+   --show-transport`→"direct (self pump via API_MONITOR_GET2)"，512 条
+   （File 120/Key 76），沙箱内文件写入同步可见；退出后监控关回。
+4. **trace dump**：`--last 3`/`--type key --last 2`/`--box --last 1`/
+   `--pid <pid> --last 3` 全部正确；`--json`→{count,entries:[…]} 包络
+   字段完整（type/type_code/status/pid/tid/box/time/name/message）。
+5. **watch --json**：NDJSON 256 行逐行独立对象，字段同上（time=hh:mm:ss、
+   timestamp=100ns 原值）。
+6. **Ctrl+C**：handler 路径与 log watch 先例同构（SetConsoleCtrlHandler→
+   原子置位→循环退出 rc0）；本测试机 bash 无法投递真实 CTRL_C_EVENT，
+   按 log watch 已验收同款代码路径复核（遗留：真机交互式复验）。
+
+### 21.2 D3 实测（节选关键输出）
+
+1. **gen-browser 全周期**：dry-run 表格正确探测本机 Edge（App Paths 来源，
+   profile=%Local AppData%…\Default）；生成 [Template_Local_Edge]（Tmpl.
+   Title/Class=WebBrowser/ForceProcess=msedge.exe/OpenFilePath 五行）。
+   `--install --box TestOss`→Template=Local_Edge 追加（template info
+   Local_Edge 可查）；`--remove --box TestOss`→摘除+节删除（template
+   info→NOT_FOUND；box dump 复核 ini 节恢复原样）。
+2. **box create 高级旗标**：`--location D:\sbie_oss_t --temp --v2-delete
+   --drop-admin`→FileRootPath=D:\sbie_oss_t\T_d3new + AutoDelete/AutoRemove/
+   UseFileDeleteV2/UseRegDeleteV2/DropAdminRights=y（box dump 逐键核对）；
+   info 派生列 auto_delete=yes/empty=yes/initialized=no。测毕 box delete。
+3. **box list --type standard**→5 箱；`--type hardening`→no boxes。
+4. **snapshot default**：take→list（current=1）→`default TestOss 1`→
+   DEFAULT=yes→`--clear`→空。测毕 snapshot remove。
+5. **proc suspend-box/resume-box**：suspend 后 proc info suspended=yes、
+   resume 后 no；`--all`→"4 process(es) in 11 box(es)"。
+6. **proc info D3**：cmd.exe→image_type=unspecified（'gpit' 返回 0 属实）、
+   flags_decoded=-（flags=0）、elevated=0、wow64=0；IPC 路径本地补列同构。
+7. **proc exempt**：get→off；on→"internet exemption: on"；get→on；off→off。
+8. **cfg whoami**：administrator/UserSettings_4BC00582/admin=yes/
+   section_exists=yes。
+9. **box dump/cfg dump**：box dump TestOss 与 ini 文件节**逐字节一致**
+   （diff 验证）；cfg dump 节清单含 GlobalSettings（3 键）+ 各节键数；
+   cfg dump GlobalSettings/用户节/缺节 NOT_FOUND rc5；--json 形态核对。
+10. **doctor**：13 项全 ok（sbiedll/abi/driver/svc/布局/ini/boxes…），rc 0；
+    --json→{checks:[…13],summary:{fail:0,warn:0}}。
+11. **maint 安全路径**：install --image 缺失文件→failed rc5；--bogus→
+    USAGE rc2。装卸往返（SbieSvc）前任已实测，SbieDrv 装卸维持不实测
+    （共享实测机风险，见 maint_d3.cpp 头注）。
+12. **box explore**：explorer 打开 FileRoot 成功，COM 关闭窗口复原。
+13. **proc start 伪命令**：`default_browser`→"rewritten to 'Start.exe
+    default_browser'"→msedge.exe 于 TestOss 启动（proc list 核对），测毕
+    kill-all。
+
+### 21.3 P2 清单处置全表（docs/06 P2×14 + docs/07 P2×5）
+
+| 项 | 处置 | 落点/理由 |
+|---|---|---|
+| 06 P2-1 trace | **已实现**（波 D1） | §20；trace watch/dump 双路径 |
+| 06 P2-2 模板应用检测（scan） | **后续** | CSbieTemplates::RunCheck 为逐模板检测器集（注册表/文件/COM/服务四类，量级≈全部 Templates.ini 条目）；template check 已列生效集、doctor 覆盖环境健康。做=中规模独立波次 |
+| 06 P2-3 快照默认标记 | **已实现**（波 D3） | box snapshot default（§19.2.6） |
+| 06 P2-4 空置/初始化状态 | **已实现**（波 D3） | box info empty/initialized（07-P2-2 组合） |
+| 06 P2-5 proc info 派生列 | **已实现**（波 D3） | flags_decoded/image_type/elevated/wow64 |
+| 06 P2-6 箱级挂起/恢复 | **已实现**（波 D3） | proc suspend-box/resume-box（含 --all 全局形） |
+| 06 P2-7 组件装卸 | **已实现**（波 D3） | maint install/uninstall（KmdUtil） |
+| 06 P2-8 外壳集成/快捷方式 | **不做** | 宿主 GUI 集成域（资源管理器右键注册表+.lnk）；脚本场景价值低，cfg set+宿主工具可等价组合；无 server/自动化编排需求 |
+| 06 P2-9 节全量导出 | **已实现**（波 D3 用户面） | box dump/cfg dump（§19.2.5，含 NO_GLOBAL/GlobalSettings 两坑修复）；节整读/整写子能力波 B 已落（box copy） |
+| 06 P2-10 interactive 人工决策 | **后续** | 需 iq.ask/iq.answer 请求-应答 op+client 等待窗；当前 server 自动拒绝+log watch 事件呈现已可用（04 §12.4-6）；协议面变更留独立波次 |
+| 06 P2-11 cfg set --drv-cache | **不做** | 边缘场景（改驱动缓存不落盘，重启即失）；UpdateConf 的 0x1811-14 编码序专为 SbieSvc 内部路径设计，暴露为脚本能力误用风险>价值 |
+| 06 P2-12 cfg whoami | **已实现**（波 D3） | IniGetUser 三元组+节存在性 |
+| 06 P2-13 box explore | **已实现**（波 D3） | ShellExecute 宿主 explorer |
+| 06 P2-14 proc exempt | **已实现**（波 D3） | ioctl 直投 API_PROCESS_EXEMPTION_CONTROL |
+| 07-P2-1 USB 接管 | **已实现**（波 D2） | docs/04 §18 |
+| 07-P2-2 箱类型派生 | **已实现**（波 D3） | box info type + list --type |
+| 07-P2-3 伪命令验收 | **已实现**（波 D3） | proc start 路由（§19.2.4，实测修复） |
+| 07-P2-4 doctor | **已实现**（精简版） | 静态体检（JS 诊断树与无依赖约束冲突，§19.2.3） |
+| 07-P2-5 浏览器模板 | **已实现**（波 D3） | template gen-browser（§19.2.2） |
+
+### 21.4 遗留
+
+1. **trace 栈符号化**（MonitorStackTrace=y 的 0xFFFF 标签区）维持 N-A
+   （07-N-A-12，GUI 调试深水区）。
+2. **Ctrl+C 真实交互复验**：bash 环境无法投递 CTRL_C_EVENT，按 log watch
+   同款 handler 复核通过（§21.1.6）。
+3. **SbieDrv 装卸实测**：维持前任决策不做（共享实测机驱动级注册删除风险
+   不可控；SbieSvc 往返已实测）。
+4. **proc info 的 flags 基值**：SbieSvc ProcInfo 路径对普通 cmd.exe 回
+   flags=0（'proc' 位面与 SBIE_FLAG_VALID_PROCESS 的取值口径差异，
+   02 §7 坑 4 同族含糊）——位名解码器本身正确（有位即列），基础值来源
+   维持现状。
+5. **06 P2-2/P2-10**：见 §21.3 处置理由（后续独立波次）。

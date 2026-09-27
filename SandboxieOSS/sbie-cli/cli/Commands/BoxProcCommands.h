@@ -51,6 +51,11 @@ void RegisterForceCommands();         // force_cmd.cpp    → force on/off/statu
                                       //    （P1-1）
 void RegisterMaintCommands();         // maint_cmd.cpp    → maint status/start/
                                       //    stop（P1-2；无 IPC op，机器级）
+void RegisterDiskImageCommands();     // disk_img_cmd.cpp → img list/status/
+                                      //    create/mount/unmount +
+                                      //    ramdisk status（波 D2，04 §18）
+void RegisterUsbCommands();           // usb_cmd.cpp      → usb status/sync
+                                      //    （07-P2-1，04 §18）
 
 namespace boxproc {
 
@@ -119,6 +124,7 @@ inline std::vector<std::wstring> Positional(const std::vector<std::wstring>& arg
     static const wchar_t* const kValueFlags[] = {
         L"--index", L"--dir", L"--info", L"--name", L"--section",
         L"--template", L"--password", L"--sbie-dll-path", L"--to", L"--type",
+        L"--size-mb",
     };
     std::vector<std::wstring> out;
     for (size_t i = 2; i < args.size(); ++i) {

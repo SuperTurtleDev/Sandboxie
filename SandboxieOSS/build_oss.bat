@@ -37,6 +37,8 @@ copy /y x64\Release\sbie-cli.exe "%REPO%\Installer\SbiePlus_x64\sbie-cli.exe"
 if errorlevel 1 goto :fail
 
 echo BUILD SUCCEEDED: %REPO%\Installer\SbiePlus_x64\sbie-cli.exe
+REM Optional next step (not run automatically - see docs/05-build.md section 8):
+REM   cmd /c make_dist.bat --verify   - assemble + zip dist\Sandboxie-OSS-x64
 exit /b 0
 :fail
 echo BUILD FAILED

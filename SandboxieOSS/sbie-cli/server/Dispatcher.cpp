@@ -11,16 +11,20 @@
 #include "LogPump.h"
 #include "ServerState.h"
 #include "SvcProxy.h"
+#include "TracePump.h"
 #include "../ipcc/SbieIpc.h"
 #include "../../SbieCore/DriverApi/DriverApi.h"
 #include "../../SbieCore/Model/Boxes.h"
 #include "../../SbieCore/Model/BoxTransfer.h"
 #include "../../SbieCore/Model/BoxUsage.h"
 #include "../../SbieCore/Model/ConfigStore.h"
+#include "../../SbieCore/Model/DiskImage.h"
+#include "../../SbieCore/Model/Monitor.h"
 #include "../../SbieCore/Model/Processes.h"
 #include "../../SbieCore/Model/Recovery.h"
 #include "../../SbieCore/Model/Snapshots.h"
 #include "../../SbieCore/Model/Templates.h"
+#include "../../SbieCore/Model/UsbSandbox.h"
 #include "../../SbieCore/SvcClient/SvcClient.h"
 #include "../../SbieCore/Util/PathMapper.h"
 #include "../../SbieCore/Util/Status.h"
@@ -197,6 +201,7 @@ OpResult HStatus(const json::JsonValue&, const std::shared_ptr<Connection>&)
         srv.set(L"idle_remaining_sec",
                 json::JsonValue((long long)(idle / 1000)));
     srv.set(L"log_pump", json::JsonValue(ServerState::Get().LogPumpActive()));
+    srv.set(L"trace_pump", json::JsonValue(ServerState::Get().TracePumpActive()));
     // 空箱守护监视器（波次 A，07-P0-2）：运行状态 + 已处理空箱事件计数
     //（client `server status` 的 GUARDIANS 列）
     srv.set(L"guardians", json::JsonValue(GuardiansActive()));
@@ -496,6 +501,45 @@ OpResult HLogWatch(const json::JsonValue&, const std::shared_ptr<Connection>& co
                               L"log pump unavailable (session leader not set"
                               L" or driver absent)");
     ServerState::Get().AddLogSubscriber(conn);
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"subscribed", json::JsonValue(true));
+    return OpResult::Succeed(std::move(data));
+}
+
+// ---------------------------------------------------------------------------
+// trace/资源监控 op（波 D1，04 §20）。泵常驻（TracePump：MonitorControl 开启
+// 本会话监控 → API_MONITOR_GET2 循环拉取 → 环形缓冲 + trace.event 推送）。
+// watch 订阅登记与 log.watch 同款（连接切订阅者轮询模式）；过滤在 client 侧
+// 做（推送帧自带全字段，各订阅者自行筛——SandMan TraceView 同语义）。dump
+// 服务端过滤（last/box/type_code/pid）。
+// ---------------------------------------------------------------------------
+
+OpResult HTraceDump(const json::JsonValue& params,
+                    const std::shared_ptr<Connection>&)
+{
+    if (!TracePumpRunning())
+        return OpResult::Fail(SbieStatus::SERVER_UNAVAILABLE,
+                              L"trace pump unavailable (driver absent or"
+                              L" monitor control rejected)");
+    const long long last = GetInt(params, L"last", 100);
+    std::wstring box;
+    GetStr(params, L"box", &box);
+    const long long typeCode = GetInt(params, L"type_code", 0);
+    const long long pid = GetInt(params, L"pid", 0);
+    json::JsonValue rows = TraceDumpJson(
+        last > 0 ? (size_t)last : 0, box,
+        typeCode > 0 ? (ULONG)typeCode : 0,
+        pid > 0 ? (ULONG)pid : 0);
+    return OpResult::Succeed(std::move(rows));
+}
+
+OpResult HTraceWatch(const json::JsonValue&, const std::shared_ptr<Connection>& conn)
+{
+    if (!TracePumpRunning())
+        return OpResult::Fail(SbieStatus::SERVER_UNAVAILABLE,
+                              L"trace pump unavailable (driver absent or"
+                              L" monitor control rejected)");
+    ServerState::Get().AddTraceSubscriber(conn);
     json::JsonValue data = json::JsonValue::Object();
     data.set(L"subscribed", json::JsonValue(true));
     return OpResult::Succeed(std::move(data));
@@ -2107,6 +2151,300 @@ OpResult HForceStatus(const json::JsonValue&, const std::shared_ptr<Connection>&
     return OpResult::Succeed(std::move(data));
 }
 
+// ---------------------------------------------------------------------------
+// 波次 D2 op（docs/04 §18）：磁盘映像 / RAM 盘 / USB 沙箱运维域。
+// img.*/ramdisk.status 经 SvcProxy 转发 SbieSvc MountManager（MSGID_IMBOX_*）；
+// usb.* = 配置键读 + Win32 卷枚举（UsbSandbox Model）+ 写路径（ConfigStore）。
+// SbieSvc 断连 → FailSvcDown（client 不降级直连重试，读命令例外）。
+// ---------------------------------------------------------------------------
+
+json::JsonValue MountJson(const model::ImMountState& m)
+{
+    json::JsonValue o = json::JsonValue::Object();
+    o.set(L"known", json::JsonValue(m.known));
+    o.set(L"mounted", json::JsonValue(m.mounted));
+    if (m.known && m.mounted) {
+        o.set(L"disk_root", json::JsonValue(m.diskRoot));
+        o.set(L"disk_size", json::JsonValue((long long)m.diskSize));
+        o.set(L"used_size", json::JsonValue((long long)m.usedSize));
+    }
+    return o;
+}
+
+std::wstring ImDiskHint(SbieStatus st)
+{
+    if (st == SbieStatus::DRIVER_UNAVAILABLE)
+        return L" (ImDisk driver not available)";
+    return L"";
+}
+
+OpResult HImgList(const json::JsonValue&, const std::shared_ptr<Connection>&)
+{
+    std::vector<std::wstring> roots;
+    SbieStatus st = SvcCall([&] {
+        return model::EnumMountedRoots(&roots);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"img list");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"img list failed" + ImDiskHint(st));
+    json::JsonValue rows = json::JsonValue::Array();
+    for (const std::wstring& r : roots) {
+        json::JsonValue row = json::JsonValue::Object();
+        row.set(L"reg_root", json::JsonValue(r));
+        rows.pushBack(std::move(row));
+    }
+    return OpResult::Succeed(std::move(rows));
+}
+
+// img.status：box 缺省 = 全箱行集；带 box = 单箱对象
+OpResult HImgStatus(const json::JsonValue& params,
+                    const std::shared_ptr<Connection>&)
+{
+    std::wstring box;
+    GetStr(params, L"box", &box);
+    auto singleJson = [](const model::BoxImageInfo& i) {
+        json::JsonValue d = json::JsonValue::Object();
+        d.set(L"box", json::JsonValue(i.box));
+        d.set(L"use_file_image", json::JsonValue(i.useFileImage));
+        d.set(L"use_ram_disk", json::JsonValue(i.useRamDisk));
+        d.set(L"confidential",
+              json::JsonValue(i.confidential ? L"confidential"
+                              : i.lessConfidential ? L"less" : L"none"));
+        d.set(L"enable_efs", json::JsonValue(i.enableEfs));
+        d.set(L"force_protection_on_mount",
+              json::JsonValue(i.forceProtectionOnMount));
+        d.set(L"image_file", json::JsonValue(i.imageFile));
+        d.set(L"image_exists", json::JsonValue(i.imageExists));
+        d.set(L"image_bytes", json::JsonValue((long long)i.imageBytes));
+        d.set(L"mounted", i.mount.known
+                              ? json::JsonValue(i.mount.mounted)
+                              : json::JsonValue());
+        d.set(L"mount", MountJson(i.mount));
+        return d;
+    };
+    if (!box.empty()) {
+        model::BoxImageInfo info;
+        SbieStatus st = SvcCall([&] {
+            return model::QueryBoxImage(box, &info);
+        });
+        if (st == SbieStatus::ERR_SVC_TRANSPORT)
+            return FailSvcDown(L"img status");
+        if (st != SbieStatus::OK)
+            return OpResult::Fail(st, L"box '" + box + L"' not found");
+        return OpResult::Succeed(singleJson(info));
+    }
+    // 全箱（EnumBoxImages 内含 QUERY——SvcProxy 内执行）
+    std::vector<model::BoxImageInfo> all;
+    SbieStatus st = SvcCall([&] {
+        all = model::EnumBoxImages();
+        return SbieStatus::OK;
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"img status");
+    json::JsonValue rows = json::JsonValue::Array();
+    for (const model::BoxImageInfo& i : all)
+        rows.pushBack(singleJson(i));
+    return OpResult::Succeed(std::move(rows));
+}
+
+OpResult HImgCreate(const json::JsonValue& params,
+                    const std::shared_ptr<Connection>&)
+{
+    std::wstring box;
+    if (!GetStr(params, L"box", &box) || box.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"'box' is required");
+    long long sizeKb = GetInt(params, L"size_kb", 0);
+    if (sizeKb < 256ll * 1024)
+        return OpResult::Fail(SbieStatus::INVALID,
+                              L"'size_kb' must be >= 262144 (256 MB)");
+    if (sizeKb > 64ull * 1024 * 1024 * 1024)
+        return OpResult::Fail(SbieStatus::INVALID, L"'size_kb' too large");
+    const std::wstring pw = ResolvePasswordParam(params);
+
+    SbieStatus st = SvcCall([&] {
+        return model::CreateBoxImage(box, (unsigned long long)sizeKb, pw);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"img create");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"img create failed for box '" + box + L"'"
+                              + ImDiskHint(st));
+
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"message", json::JsonValue(
+                 L"image created for box '" + box + L"' ("
+                 + std::to_wstring(sizeKb / 1024) + L" MB"
+                 + (pw.empty() ? L"" : L", AES") + L")"));
+    return OpResult::Succeed(std::move(data));
+}
+
+OpResult HImgMount(const json::JsonValue& params,
+                   const std::shared_ptr<Connection>&)
+{
+    std::wstring box;
+    if (!GetStr(params, L"box", &box) || box.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"'box' is required");
+    const std::wstring pw = ResolvePasswordParam(params);
+    std::optional<bool> protect, adminOnly;
+    if (const json::JsonValue* v = params.find(L"protect"); v && v->type() == json::JsonValue::Type::Bool)
+        protect = v->asBool();
+    if (const json::JsonValue* v = params.find(L"admin_only"); v && v->type() == json::JsonValue::Type::Bool)
+        adminOnly = v->asBool();
+    const bool autoUnmount = GetBool(params, L"auto_unmount", false);
+
+    SbieStatus st = SvcCall([&] {
+        return model::MountBoxImage(box, pw, protect, adminOnly, autoUnmount);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"img mount");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"img mount failed for box '" + box + L"'"
+                              + ImDiskHint(st));
+
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"message", json::JsonValue(
+                 L"box '" + box + L"' image mounted"
+                 + (autoUnmount ? L" (auto unmount on box close)" : L"")));
+    return OpResult::Succeed(std::move(data));
+}
+
+OpResult HImgUnmount(const json::JsonValue& params,
+                     const std::shared_ptr<Connection>&)
+{
+    std::wstring box;
+    if (!GetStr(params, L"box", &box) || box.empty())
+        return OpResult::Fail(SbieStatus::INVALID, L"'box' is required");
+
+    SbieStatus st = SvcCall([&] {
+        return model::UnmountBoxImage(box);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"img unmount");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"img unmount failed for box '" + box + L"'"
+                              + (st == SbieStatus::NOT_FOUND
+                                     ? L" (root not mounted)" : L""));
+
+    json::JsonValue data = json::JsonValue::Object();
+    data.set(L"message",
+             json::JsonValue(L"box '" + box + L"' image unmounted"));
+    return OpResult::Succeed(std::move(data));
+}
+
+OpResult HRamDiskStatus(const json::JsonValue&,
+                        const std::shared_ptr<Connection>&)
+{
+    model::RamDiskInfo info;
+    SbieStatus st = SvcCall([&] {
+        return model::QueryRamDisk(&info);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"ramdisk status");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"ramdisk status failed");
+
+    json::JsonValue d = json::JsonValue::Object();
+    d.set(L"size_kb", json::JsonValue((long long)info.sizeKb));
+    d.set(L"size_human", json::JsonValue(
+              info.sizeKb ? FormatHumanBytes(info.sizeKb * 1024)
+                          : std::wstring(L"(not configured)")));
+    d.set(L"size_below_minimum", json::JsonValue(info.sizeBelowMinimum));
+    d.set(L"letter", json::JsonValue(
+              info.letter.empty() ? L"(auto)" : info.letter));
+    json::JsonValue boxes = json::JsonValue::Array();
+    for (const std::wstring& b : info.boxes)
+        boxes.pushBack(json::JsonValue(b));
+    d.set(L"boxes", std::move(boxes));
+    d.set(L"mounted", info.mount.known
+                          ? json::JsonValue(info.mount.mounted)
+                          : json::JsonValue());
+    d.set(L"mount", MountJson(info.mount));
+    return OpResult::Succeed(std::move(d));
+}
+
+OpResult HUsbStatus(const json::JsonValue&, const std::shared_ptr<Connection>&)
+{
+    // 键面为驱动缓存读（worker 线程安全）；卷枚举纯 Win32
+    model::UsbSandboxInfo info;
+    SbieStatus st = model::QueryUsbSandbox(&info);
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"usb status failed");
+
+    json::JsonValue d = json::JsonValue::Object();
+    d.set(L"force_usb_drives", json::JsonValue(info.forceUsbDrives));
+    d.set(L"usb_sandbox", json::JsonValue(info.sandboxName));
+    d.set(L"sandbox_exists", json::JsonValue(info.sandboxExists));
+    json::JsonValue dv = json::JsonValue::Array();
+    for (const std::wstring& v : info.disabledVolumes)
+        dv.pushBack(json::JsonValue(v));
+    d.set(L"disabled_volumes", std::move(dv));
+    json::JsonValue ff = json::JsonValue::Array();
+    for (const std::wstring& v : info.forceFolders)
+        ff.pushBack(json::JsonValue(v));
+    d.set(L"force_folders", std::move(ff));
+    json::JsonValue vols = json::JsonValue::Array();
+    for (const model::UsbVolume& v : info.volumes) {
+        json::JsonValue r = json::JsonValue::Object();
+        r.set(L"serial", json::JsonValue(v.serial));
+        r.set(L"label", json::JsonValue(v.label));
+        json::JsonValue mps = json::JsonValue::Array();
+        for (const std::wstring& mp : v.mountPoints)
+            mps.pushBack(json::JsonValue(mp));
+        r.set(L"mount_points", std::move(mps));
+        r.set(L"bus_known", json::JsonValue(v.busKnown));
+        r.set(L"on_usb_bus", json::JsonValue(v.onUsbBus));
+        r.set(L"taken", json::JsonValue(info.VolumeTaken(v)));
+        vols.pushBack(std::move(r));
+    }
+    d.set(L"volumes", std::move(vols));
+    return OpResult::Succeed(std::move(d));
+}
+
+OpResult HUsbSync(const json::JsonValue& params,
+                  const std::shared_ptr<Connection>&)
+{
+    const bool dryRun = GetBool(params, L"dry_run", false);
+    const std::wstring pw = ResolvePasswordParam(params);
+
+    model::UsbSyncResult res;
+    SbieStatus st = SvcCall([&] {
+        return model::SyncUsbSandbox(pw, dryRun, &res);
+    });
+    if (st == SbieStatus::ERR_SVC_TRANSPORT)
+        return FailSvcDown(L"usb sync");
+    if (st == SbieStatus::INVALID)
+        return OpResult::Fail(
+            st, L"usb drive sandboxing is disabled"
+                L" (enable with: sbie-cli cfg set ForceUsbDrives y)");
+    if (st != SbieStatus::OK)
+        return OpResult::Fail(st, L"usb sync failed"
+                                  + PasswordHintText(st, pw));
+
+    model::UsbSandboxInfo info;
+    (void)model::QueryUsbSandbox(&info);   // 箱名（读失败不致命）
+    const std::wstring msg = dryRun
+        ? L"dry run: " + std::to_wstring(res.added)
+              + L" folder(s) would be added, " + std::to_wstring(res.removed)
+              + L" removed for box '" + info.sandboxName + L"'"
+        : L"usb sandbox '" + info.sandboxName + L"' synced ("
+              + std::to_wstring(res.added) + L" added, "
+              + std::to_wstring(res.removed) + L" removed"
+              + (res.boxCreated ? L", box created" : L"") + L")";
+    json::JsonValue d = json::JsonValue::Object();
+    d.set(L"message", json::JsonValue(msg));
+    d.set(L"box", json::JsonValue(info.sandboxName));
+    d.set(L"box_created", json::JsonValue(res.boxCreated));
+    d.set(L"dry_run", json::JsonValue(dryRun));
+    d.set(L"added", json::JsonValue((long long)res.added));
+    d.set(L"removed", json::JsonValue((long long)res.removed));
+    json::JsonValue ff = json::JsonValue::Array();
+    for (const std::wstring& v : res.written)
+        ff.pushBack(json::JsonValue(v));
+    d.set(L"force_folders", std::move(ff));
+    return OpResult::Succeed(std::move(d));
+}
+
 // 未实现 op 的占位（后续波次在 RegisterBuiltinOps 换成真 handler 即可）
 OpResult Stub(const std::string& op)
 {
@@ -2143,6 +2481,9 @@ void RegisterBuiltinOps()
     // log（04 §4.7）——泵在本 server 内
     reg[ipc::kOpLogDump] = HLogDump;
     reg[ipc::kOpLogWatch] = HLogWatch;
+    // trace（04 §20，波 D1）——TracePump 在本 server 内
+    reg[ipc::kOpTraceDump] = HTraceDump;
+    reg[ipc::kOpTraceWatch] = HTraceWatch;
 
     // ---- 写路径（server 写路径波次，04 §12；参数对拍表见该节）----
     reg[ipc::kOpBoxCreate]     = HBoxCreate;
@@ -2185,6 +2526,16 @@ void RegisterBuiltinOps()
     reg[ipc::kOpBoxExport]     = HBoxExport;
     reg[ipc::kOpBoxImport]     = HBoxImport;
 
+    // ---- 波次 D2（磁盘映像/RAM 盘/USB 沙箱运维域，docs/04 §18）----
+    reg[ipc::kOpImgList]       = HImgList;
+    reg[ipc::kOpImgStatus]     = HImgStatus;
+    reg[ipc::kOpImgCreate]     = HImgCreate;
+    reg[ipc::kOpImgMount]      = HImgMount;
+    reg[ipc::kOpImgUnmount]    = HImgUnmount;
+    reg[ipc::kOpRamDiskStatus] = HRamDiskStatus;
+    reg[ipc::kOpUsbStatus]     = HUsbStatus;
+    reg[ipc::kOpUsbSync]       = HUsbSync;
+
     // ---- 未实现（规范错误码；后续波次补齐）----
     // tpl.list/info/check：client 直连实现运行良好（audit 判降级可接受，
     // 06 §5），补 server op 仅为路径统一
@@ -2202,6 +2553,10 @@ void RegisterBuiltinOps()
                                     const std::shared_ptr<Connection>&) {
         return OpResult::Fail(SbieStatus::INVALID,
                               L"'log.event' is a server-push-only op"); };
+    reg[ipc::kOpTraceEvent]    = [](const json::JsonValue&,
+                                    const std::shared_ptr<Connection>&) {
+        return OpResult::Fail(SbieStatus::INVALID,
+                              L"'trace.event' is a server-push-only op"); };
     // 注：kOpServerShutdown 在 ServerMain 工作线程特判（会话校验），不入表。
 }
 

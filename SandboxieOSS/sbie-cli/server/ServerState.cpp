@@ -88,6 +88,8 @@ void ServerState::Detach(const std::shared_ptr<Connection>& c)
     std::lock_guard<std::mutex> lk(mtx_);
     conns_.erase(std::remove(conns_.begin(), conns_.end(), c), conns_.end());
     subs_.erase(std::remove(subs_.begin(), subs_.end(), c), subs_.end());
+    traceSubs_.erase(std::remove(traceSubs_.begin(), traceSubs_.end(), c),
+                     traceSubs_.end());
     if (conns_.empty())
         idleDeadlineTick_ = GetTickCount64() + (ULONGLONG)idleTimeoutSec_ * 1000;
 }
@@ -110,6 +112,20 @@ std::vector<std::shared_ptr<Connection>> ServerState::LogSubscribers()
 {
     std::lock_guard<std::mutex> lk(mtx_);
     return subs_;
+}
+
+void ServerState::AddTraceSubscriber(const std::shared_ptr<Connection>& c)
+{
+    c->traceSubscriber = true;
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (std::find(traceSubs_.begin(), traceSubs_.end(), c) == traceSubs_.end())
+        traceSubs_.push_back(c);
+}
+
+std::vector<std::shared_ptr<Connection>> ServerState::TraceSubscribers()
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    return traceSubs_;
 }
 
 } // namespace sbie::server

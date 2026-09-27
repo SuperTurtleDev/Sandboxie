@@ -1,0 +1,176 @@
+@echo off
+setlocal EnableExtensions
+REM ============================================================
+REM  Sandboxie-OSS dist packaging - x64
+REM
+REM  Prereq: 1) root build.bat produced the install layout
+REM             ..\Installer\SbiePlus_x64\
+REM          2) build_oss.bat produced sbie-cli.exe there.
+REM  Output: dist\Sandboxie-OSS-x64\        staged tree
+REM          dist\Sandboxie-OSS-x64.zip     the archive
+REM  Usage:  make_dist.bat [--verify]
+REM          --verify  also extract the zip to dist\_verify and
+REM                    run the extracted sbie-cli.exe standalone.
+REM
+REM  Core runtime selection criteria (verified 2026-09-27,
+REM  dumpbin /dependents + source audit, details in
+REM  docs/05-build.md section 8):
+REM    - sbie-cli.exe imports ONLY system DLLs + VC runtime
+REM      (MSVCP140/VCRUNTIME140/VCRUNTIME140_1) - no static dep
+REM      on any Sandboxie binary; SbieDll.dll is LoadLibrary-ed
+REM      at runtime, same directory is search candidate #2.
+REM    - SbieSvc/KmdUtil/Start/SbieIni/SandboxieRpcSs/
+REM      SandboxieDcomLaunch/SboxHostDll import SbieDll.dll
+REM      statically - shipping SbieDll.dll alongside covers all.
+REM    - KmdUtil.exe is invoked by "sbie-cli maint" for driver
+REM      start/stop; ImBox.exe is spawned by SbieSvc MountManager
+REM      for disk-image/ram boxes; SandboxieRpcSs.exe +
+REM      SandboxieDcomLaunch.exe are auto-started sandboxed COM
+REM      stubs (core\dll\ipc_start.c) unless NoSandboxieRpcSs=y.
+REM    - 32\SbieDll.dll + 32\SbieSvc.exe = WOW64 pair for
+REM      sandboxing 32-bit apps.
+REM    - VC runtime trio included so the dist runs on machines
+REM      without the VC++ 2015-2022 redist installed.
+REM    - driver triple taken from layout\driver\ where the
+REM      signed .cat matches that exact SbieDrv.sys build
+REM      (the layout-root SbieDrv.sys is a different, test-
+REM      signed build - do NOT mix).
+REM    - EXCLUDED (Plus-specific or not needed by sbie-cli):
+REM      SandMan.exe, Qt6*.dll, QSbieAPI.dll, MiscHelpers.dll,
+REM      UGlobalHotkey.dll, qtsingleapp.dll, platforms\, styles\,
+REM      tls\, 7z.dll, UpdUtil.exe, SbieShellExt.dll, MiniDump,
+REM      SbieCtrl.exe, SboxHostDll.dll, SbieIni.exe (sbie-cli
+REM      has its own cfg group), Start.exe (sbie-cli proc start
+REM      launches through SbieDll itself), SandboxieWUAU/BITS/
+REM      Crypto (opt-in sandboxed-service stubs), pdb files.
+REM    - No "msgs" text directory exists in the layout: message
+REM      text ships compiled inside SbieMsg.dll (resource-only
+REM      DLL built from Sandboxie\msgs\msgs.mc).
+REM  Spec: docs/05-build.md section 8 (ASCII only: cmd.exe
+REM  parses batch files in the OEM code page)
+REM ============================================================
+cd /d "%~dp0"
+set "OSSDIR=%CD%"
+set "REPO=%CD%\.."
+set "LAYOUT=%REPO%\Installer\SbiePlus_x64"
+set "DISTROOT=%OSSDIR%\dist"
+set "DIST_NAME=Sandboxie-OSS-x64"
+set "STAGE=%DISTROOT%\%DIST_NAME%"
+set "ZIP=%DISTROOT%\%DIST_NAME%.zip"
+set "VERIFY="
+if /i "%~1"=="--verify" set "VERIFY=1"
+
+REM --- 0. prerequisites: layout + every input file verified ---
+if not exist "%LAYOUT%\" (
+    echo [ERROR] %LAYOUT% missing - run root build.bat first.
+    goto :fail
+)
+if not exist "%LAYOUT%\sbie-cli.exe" (
+    echo [ERROR] %LAYOUT%\sbie-cli.exe missing - run build_oss.bat first.
+    goto :fail
+)
+
+REM root files copied flat into the dist root
+set "ROOT_FILES=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
+REM signed driver triple from layout\driver\
+set "DRV_FILES=SbieDrv.sys SbieDrv.cat SbieDrv.inf"
+REM WOW64 pair from layout\32\
+set "WOW_FILES=SbieDll.dll SbieSvc.exe"
+
+set "MISSING="
+for %%f in (%ROOT_FILES%) do if not exist "%LAYOUT%\%%f" call :add_missing "%%f"
+for %%f in (%DRV_FILES%)  do if not exist "%LAYOUT%\driver\%%f" call :add_missing "driver\%%f"
+for %%f in (%WOW_FILES%)  do if not exist "%LAYOUT%\32\%%f" call :add_missing "32\%%f"
+if not exist "%REPO%\LICENSE.Classic"        call :add_missing "..\LICENSE.Classic"
+if not exist "%OSSDIR%\thirdparty\README.md" call :add_missing "thirdparty\README.md"
+if not exist "%OSSDIR%\docs\README.md"       call :add_missing "docs\README.md"
+if defined MISSING (
+    echo [ERROR] missing prerequisites:%MISSING%
+    goto :fail
+)
+
+REM --- 1. stage the dist tree ---
+echo [1/4] Staging %STAGE%
+if exist "%STAGE%" rmdir /s /q "%STAGE%"
+if exist "%STAGE%" ( echo [ERROR] cannot clean stale %STAGE% & goto :fail )
+mkdir "%STAGE%\driver" "%STAGE%\32" "%STAGE%\docs" || goto :fail
+
+for %%f in (%ROOT_FILES%) do copy /y "%LAYOUT%\%%f"        "%STAGE%\%%f"        >nul || goto :fail
+for %%f in (%DRV_FILES%) do copy /y "%LAYOUT%\driver\%%f"  "%STAGE%\driver\%%f" >nul || goto :fail
+for %%f in (%WOW_FILES%) do copy /y "%LAYOUT%\32\%%f"      "%STAGE%\32\%%f"     >nul || goto :fail
+copy /y "%REPO%\LICENSE.Classic"        "%STAGE%\LICENSE-OSS"     >nul || goto :fail
+copy /y "%OSSDIR%\thirdparty\README.md" "%STAGE%\THIRD-PARTY.md"  >nul || goto :fail
+copy /y "%OSSDIR%\docs\README.md"       "%STAGE%\docs\README.md"  >nul || goto :fail
+
+REM --- 2. VERSION.txt: sbie-cli version + driver version + date ---
+echo [2/4] Generating VERSION.txt
+REM Running the staged copy doubles as a smoke test: it resolves
+REM SbieDll.dll from its own directory (candidate #2 of the
+REM drv::LoadSbieDll search chain after --sbie-dll-path).
+set "CLI_VER=unknown"
+"%STAGE%\sbie-cli.exe" --no-server version > "%DISTROOT%\version.tmp" 2>nul
+if errorlevel 1 (
+    echo [WARN] staged sbie-cli.exe version check failed - CLI_VER stays unknown
+) else (
+    for /f "tokens=2" %%v in ('findstr /b /c:"sbie-cli " "%DISTROOT%\version.tmp"') do set "CLI_VER=%%v"
+)
+del /f /q "%DISTROOT%\version.tmp" >nul 2>&1
+set "DRV_VER=unknown"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Item -LiteralPath '%LAYOUT%\driver\SbieDrv.sys').VersionInfo.FileVersion"`) do set "DRV_VER=%%v"
+set "BUILD_DATE=unknown"
+for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"`) do set "BUILD_DATE=%%d"
+
+>  "%STAGE%\VERSION.txt" echo Sandboxie-OSS dist %DIST_NAME%
+>> "%STAGE%\VERSION.txt" echo sbie-cli version : %CLI_VER%
+>> "%STAGE%\VERSION.txt" echo SbieDrv version  : %DRV_VER%  - signed triple from Installer\SbiePlus_x64\driver
+>> "%STAGE%\VERSION.txt" echo build date       : %BUILD_DATE%
+>> "%STAGE%\VERSION.txt" echo layout source    : Installer\SbiePlus_x64 after root build.bat + build_oss.bat
+
+REM --- 3. zip + manifest ---
+echo [3/4] Creating %ZIP%
+if exist "%ZIP%" del /f /q "%ZIP%"
+powershell -NoProfile -Command "Compress-Archive -LiteralPath '%STAGE%' -DestinationPath '%ZIP%' -Force"
+if errorlevel 1 goto :fail
+
+echo.
+echo ===== dist manifest: %DIST_NAME% =====
+powershell -NoProfile -Command "$root='%STAGE%'; $f=Get-ChildItem -LiteralPath $root -Recurse -File; $f | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.FullName.Substring($root.Length+1) }; ''; 'TOTAL: {0} files, {1:N0} bytes' -f $f.Count, ($f | Measure-Object Length -Sum).Sum; 'ZIP  : {0} bytes' -f (Get-Item -LiteralPath '%ZIP%').Length"
+echo =========================================
+
+REM --- 4. optional verification: extract zip, run extracted exe ---
+if not defined VERIFY (
+    echo.
+    echo DIST SUCCEEDED: %ZIP%
+    echo hint: run "make_dist.bat --verify" to extract-check the zip and
+    echo        smoke-test the extracted sbie-cli.exe standalone.
+    exit /b 0
+)
+
+echo.
+echo [4/4] Verifying zip integrity + standalone run
+set "VDIR=%DISTROOT%\_verify"
+if exist "%VDIR%" rmdir /s /q "%VDIR%"
+mkdir "%VDIR%" || goto :fail
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%VDIR%' -Force"
+if errorlevel 1 goto :fail
+if not exist "%VDIR%\%DIST_NAME%\sbie-cli.exe" (
+    echo [ERROR] zip layout wrong: sbie-cli.exe not at %DIST_NAME%\ root after extract
+    goto :fail
+)
+"%VDIR%\%DIST_NAME%\sbie-cli.exe" --no-server version
+if errorlevel 1 (
+    echo [ERROR] extracted sbie-cli.exe failed to run
+    goto :fail
+)
+echo VERIFY OK: zip extracts; extracted sbie-cli.exe runs and resolves
+echo               SbieDll.dll from its own directory.
+echo DIST SUCCEEDED: %ZIP%
+exit /b 0
+
+:add_missing
+set "MISSING=%MISSING% %~1"
+exit /b 0
+
+:fail
+echo DIST FAILED
+exit /b 1

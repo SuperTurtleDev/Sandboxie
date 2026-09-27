@@ -20,6 +20,7 @@
 
 #include <windows.h>
 #include <string>
+#include <vector>
 
 namespace sbie::svc {
 
@@ -71,6 +72,35 @@ public:
     SbieStatus GetProcInfo(ULONG pid, unsigned infoClasses /*1|2|4*/, ProcInfo* out);
     SbieStatus RunSandboxed(const std::wstring& box, const std::wstring& cmd,
                             const std::wstring& dir, ULONG creationFlags, RunResult* out);
+
+    // ---- ImBox / MountManager（波 D2，docs/04 §18；服务端 core/svc/MountManager.cpp，
+    //      wire 头 vendor/MountManagerWire.h）----
+    // 服务端把 MSGID_IMBOX_* 挂在同一 \RPC Control\SbieSvcPort LPC 端口；挂载的
+    // 实际执行（拉起 ImBox.exe + ImDisk 驱动格式化 + FileRoot junction）全部在
+    // SbieSvc 内完成——client 只组包。回复 status 为 **win32 错误码**（与
+    // SBIE_INI 系列的 NTSTATUS 惯例不同）：ERROR_DEVICE_NOT_AVAILABLE =
+    // ImDisk 驱动未安装/未运行（SandboxieTools 运行时缺席）；ERROR_NOT_FOUND =
+    // 目标根未挂载。实现统一折叠为 SbieStatus（DRIVER_UNAVAILABLE/NOT_FOUND/…）。
+    struct ImDiskMount {
+        bool mounted = false;
+        std::wstring diskRoot;              // \Device\ImDiskN（NT 设备路径）
+        unsigned long long diskSize = 0;    // 字节
+        unsigned long long usedSize = 0;    // 字节（ramdisk=进程内存，映像=稀疏文件实占）
+    };
+    // fileRoot 传 DOS 路径（实现内加 \??\ 前缀，对齐 QSbieAPI 形态）；
+    // regRoot 传 NT 注册表根（drv::QueryBoxPath 原样输出）。
+    SbieStatus ImBoxCreate(const std::wstring& fileRootDos,
+                           unsigned long long sizeKb,
+                           const std::wstring& password);
+    SbieStatus ImBoxMount(const std::wstring& regRootNt,
+                          const std::wstring& fileRootDos,
+                          const std::wstring& password, bool protectRoot,
+                          bool adminOnly, bool autoUnmount);
+    SbieStatus ImBoxUnmount(const std::wstring& regRootNt);
+    // 已挂载根枚举（reg_root 多串）；ImDisk 缺席 → DRIVER_UNAVAILABLE
+    SbieStatus ImBoxEnum(std::vector<std::wstring>* regRoots);
+    // regRootNt 空 = 查询共享 RAM 盘；未挂载 → NOT_FOUND
+    SbieStatus ImBoxQuery(const std::wstring& regRootNt, ImDiskMount* out);
 
 private:
     SvcClient() = default;

@@ -22,7 +22,7 @@
 | 组件 | 路径 | 许可证 | 本项目可否复制源码 | 本项目可否参考实现 |
 |---|---|---|---|---|
 | Sandboxie core | `Sandboxie\`（`LICENSE.Classic` = GPLv3） | GPLv3 | **可以**（保留版权头） | 可以 |
-| QSbieAPI | `SandboxiePlus\QSbieAPI\`（含 `LICENSE` 文件，LGPL-2.1） | LGPL-2.1 | 不复制整文件 | **可以**（协议层的主要参考） |
+| QSbieAPI | `SandboxiePlus\QSbieAPI\`（含 `LICENSE` 文件，LGPL-3.0） | LGPL-3.0 | 不复制整文件 | **可以**（协议层的主要参考） |
 | SandMan | `SandboxiePlus\SandMan\`（整目录） | **custom license（非 OSI）** | **禁止** | **禁止**（仅可读 .h 确认功能面，见 §0.3） |
 | MiscHelpers | `SandboxiePlus\MiscHelpers\` | LGPL（Qt 系） | 否（不用 Qt） | 否（无对应需求） |
 | UGlobalHotkey | `SandboxiePlus\UGlobalHotkey\` | Public Domain（Qt 系） | 否 | 否 |
@@ -35,7 +35,8 @@
 - `LICENSE.Plus:58` — "SandMan is the primary Sandboxie-Plus UI component, provided under a custom license."
 - `LICENSE.Plus:59` — "QSbieAPI is a standalone reimplementation of Sandboxie's API using IPC mechanisms…, licensed under the LGPL."
 - `LICENSE.Plus:60` — "Sandboxie core components, licensed under the GPL v3."
-- `SandboxiePlus\QSbieAPI\LICENSE` 存在（LGPL-2.1 全文）。
+- `SandboxiePlus\QSbieAPI\LICENSE` 存在（LGPL-3.0 全文：Version 3, 29 June 2007。
+  初稿曾误记 LGPL-2.1——波 C 随拷核实 LICENSE 为 V3，波 D1 复核确认并订正本表）。
 - `SandboxieTools\` 目录无 LICENSE/README 许可证声明（仅源码文件）→ 按不可用处理。
 - `SandboxiePlus\SandMan\LICENSE` 存在，内容为上述 custom license 全文。
 

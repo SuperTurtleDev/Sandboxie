@@ -243,3 +243,79 @@ exit=0
 - `status --json` 特例：本机驱动运行中，"驱动未运行优雅降级"路径未实测（不为此停机）。
   代码路径：`Gather()` 在 SbieDll 缺席时仍探测 `\Device\SandboxieDriverApi`，status
   输出 `alive:false` 并 exit 3，不崩溃。
+
+## 8. dist 发行包（`make_dist.bat`）
+
+`SandboxieOSS\make_dist.bat` 从根构建产物组装 **Sandboxie-OSS 最小发行包**：
+`sbie-cli` + core 运行时（GPL core 二进制，自根构建复制）+ 许可文本，不含任何
+Plus 专属组件与 Qt 运行时。
+
+### 8.1 依赖前提
+
+1. 根 `build.bat` 已跑完：`..\Installer\SbiePlus_x64\` 布局在位（core 二进制均取自此处）。
+2. `build_oss.bat` 已跑完：`..\Installer\SbiePlus_x64\sbie-cli.exe` 存在。
+
+脚本对**全部输入文件逐一核存在**，缺任一直接 `DIST FAILED` 并列出缺失清单。
+
+### 8.2 清单判据（逐文件核实记录，2026-09-27）
+
+判据 = **sbie-cli 运行 + 沙箱功能所需**；核实手段 = `dumpbin /dependents` +
+源码审计（core\dll、core\svc、sbie-cli/SbieCore）。
+
+| dist 内路径 | 来源（layout 相对） | 判据 |
+|---|---|---|
+| `sbie-cli.exe` | 根 | 交付物本体。**静态导入仅系统 DLL + VC 运行时**（KERNEL32/USER32/ADVAPI32/MSVCP140/VCRUNTIME140/VCRUNTIME140_1/UCRT），无任何 Sandboxie 二进制的链接期依赖；SbieDll.dll 由 `drv::LoadSbieDll` 运行时 LoadLibrary（同目录为搜索候选 2 号，见 02 §1） |
+| `SbieDll.dll` | 根 | sbie-cli 动态加载（proc start 等注入路径）；同时是 SbieSvc/KmdUtil/SandboxieRpcSs/SandboxieDcomLaunch/SbieIni/Start/SboxHostDll 的静态导入 |
+| `SbieSvc.exe` | 根 | 沙箱服务（LPC 端口、驱动代理）。静态导入 SbieDll.dll → 同目录分发即可解析 |
+| `SbieMsg.dll` | 根 | 消息文本资源。**layout 中无 msgs 文本目录**——消息文本编译于此资源 DLL（源 `Sandboxie\msgs\msgs.mc`），任务书"msgs 文本目录"核实结果=不存在、不需要 |
+| `KmdUtil.exe` | 根 | `sbie-cli maint start/stop --driver` 经 `SbieDll_RunFromHome` 从安装目录拉起（`SbieCore\Model\Maintenance.cpp:99-148`，GPL core install\kmdutil 仅运行时调用） |
+| `ImBox.exe` | 根 | 磁盘映像/ram box 运行时依赖：SbieSvc MountManager 以 `<安装目录>\ImBox.exe` 拉起（`Sandboxie\core\svc\MountManager.cpp:848-887`）。注意 ImBox 源码在 SandboxieTools（无许可证，禁复用），**这里只随 GPL core 布局分发其二进制** |
+| `SandboxieRpcSs.exe`、`SandboxieDcomLaunch.exe` | 根 | 沙箱内 COM/RPC 桩，`core\dll\ipc_start.c`：任何进程请求 `epmapper` 端口即自动启动 RpcSs（除非 `NoSandboxieRpcSs=y`），RpcSs 再拉起 DcomLaunch——默认沙箱功能的必需件（x64） |
+| `Templates.ini` | 根 | `sbie-cli template list/info/apply` 读安装目录 Templates.ini（`SbieCore\Model\Templates.cpp:215`） |
+| `msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` | 根 | sbie-cli 与 ImBox 的 VC 运行时导入（目标机未装 VC++ 2015-2022 redist 时必需；UCRT 为 Win10+ 系统自带，不带） |
+| `driver\SbieDrv.sys`、`driver\SbieDrv.cat`、`driver\SbieDrv.inf` | `driver\` | 驱动签名三元组。**必须整组取自 `driver\` 子目录**：该处 sys+cat 为 KernelSigner Lab 配对签名；layout 根部的 `SbieDrv.sys` 是另一份 WDKTestCert 测试签名构建（md5 不同），混用会导致 cat 校验失败 |
+| `32\SbieDll.dll`、`32\SbieSvc.exe` | `32\` | WOW64 对：沙箱内 32 位应用注入用（x86 对，layout 原样） |
+| `LICENSE-OSS` | `..\LICENSE.Classic` | GPLv3 全文（core 同源许可） |
+| `THIRD-PARTY.md` | `thirdparty\README.md` | thirdparty 组件来源/许可证/状态说明的拷贝 |
+| `docs\README.md` | `docs\README.md` | OSS 项目文档索引（含许可证声明与冻结策略） |
+| `VERSION.txt` | 生成 | sbie-cli 版本（实跑 staged 副本 `version` 解析，兼作同目录 SbieDll 冒烟）+ SbieDrv 文件版本（VersionInfo）+ 构建日期 |
+
+**明确不带**（判据核实为"非必需"或"Plus 专属"）：`SandMan.exe`、`Qt6*.dll`、
+`QSbieAPI.dll`、`MiscHelpers.dll`、`UGlobalHotkey.dll`、`qtsingleapp.dll`、
+`platforms\`、`styles\`、`tls\`、`7z.dll`、`translations.7z`、
+`troubleshooting.7z`、`SbieShellExt.dll`、`SbieShellPkg.msix`、`UpdUtil.exe`、
+`MiniDump.exe`、`SbieCtrl.exe`（旧 UI）、`SandboxieBITS/WUAU/Crypto.exe`
+（模板选入的沙箱服务桩，非默认必需——需要对应模板的 box 从完整安装补充）、
+`SboxHostDll.dll`/`SbieIni.exe`/`Start.exe`（sbie-cli 经自有 SvcClient/SbieDll
+路径实现同类功能，dumpbin 证实 sbie-cli 不依赖它们）、全部 `.pdb`、
+`Sandboxie.ini`/`SbieSettings.ini`（Sandboxie.ini 首次运行按 core 规则生成或
+落 `C:\Windows\Sandboxie.ini`，见 `SbieCore\Model\Templates.cpp:239-246`）。
+
+### 8.3 使用法
+
+```
+cmd /c SandboxieOSS\make_dist.bat            REM 组装 + 打包 + 控制台清单
+cmd /c SandboxieOSS\make_dist.bat --verify   REM 另解压 zip 到 dist\_verify 并
+                                              REM 实跑解压副本（version 命令）
+```
+
+输出：`dist\Sandboxie-OSS-x64\`（staged 树）与 `dist\Sandboxie-OSS-x64.zip`
+（Compress-Archive，含顶层目录）。控制台逐文件打印 **相对路径+字节大小+合计**
+（验收用）。`dist\` 生成物不入 git（`dist\.gitignore` 忽略全部）。
+`build_oss.bat` 末尾有调用提示行，dist 为可选步骤、不并入默认构建。
+
+### 8.4 实跑验收记录（2026-09-27）
+
+- `make_dist.bat --verify` 全绿：21 文件 / 9,619,280 字节（明细见控制台清单，
+  最大件 `SbieMsg.dll` 3,476,480；zip 3,221,009 字节）。
+- zip 条目核验：21 条全部位于 `Sandboxie-OSS-x64\` 顶层目录下（含
+  `driver\`、`32\`、`docs\` 子目录）。
+- 解压副本独立运行：`dist\_verify\Sandboxie-OSS-x64\sbie-cli.exe
+  --no-server version` → `sbie-cli 0.1.0 / driver 5.73.5 (abi 0x57230, alive) /
+  svc 5.73.5`，exit=0——同目录 SbieDll.dll 探测成功。
+- `--sbie-dll-path` 显式路径：把解压出的 `sbie-cli.exe` 单独放到空目录
+  （旁边无 SbieDll.dll）分别实测——无伴随时走系统回退链（注册表 SbieSvc
+  ImagePath）成功；`--sbie-dll-path <解压目录>` 显式指定亦成功，exit 均 0。
+- 已知边界：本机驱动/服务在系统级安装，"driver alive"来自系统实例；
+  发行包安装到裸机后需先 `maint start`（管理员）装驱动/服务方可沙箱。
+

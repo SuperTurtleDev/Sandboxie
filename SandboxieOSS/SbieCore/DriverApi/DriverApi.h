@@ -276,6 +276,34 @@ SbieStatus ReloadConf(unsigned long flags, bool reconfigure);
 // 失败时 oldState 被 SbieDll 置 FALSE（sbieapi.c 同款）。
 SbieStatus DisableForceProcess(ULONG* newState, ULONG* oldState);
 
+// ---------------------------------------------------------------------------
+// 监控/trace（波 D1，docs/04 §20；02 §3.6）
+// ---------------------------------------------------------------------------
+
+// API_MONITOR_GET2 的取回结果分类（驱动端 session.c Session_Api_MonitorGet2）
+enum class MonitorFetch {
+    Ok,         // 条目已写入缓冲（bufferLen>0；moreEntries=true 时积压未尽）
+    Empty,      // STATUS_NO_MORE_ENTRIES：会话监控环空
+    NotEnabled, // STATUS_DEVICE_NOT_READY：本会话 monitor_log 未分配（未开监控）
+    Error,      // 其他失败（沙箱内调用 NOT_IMPLEMENTED / 驱动消失…）
+};
+
+// API_MONITOR_CONTROL：本会话监控总开关（非沙箱限定；MonitorAdminOnly=y 时
+// set=1 需管理员）。newState/oldState 各可空；get 回填 monitor_log 是否在场。
+// 开启时驱动按 GlobalSettings\TraceBufferPages（缺省 256 页）分配环形缓冲。
+SbieStatus MonitorControl(ULONG* newState, ULONG* oldState);
+
+// API_MONITOR_GET2 批量拉取本会话监控环（02 §7 坑 1：SbieDll 无包装导出，
+// 经 SbieApi_Ioctl 直投 API_MONITOR_GET2_ARGS{buffer_ptr, buffer_len}）。
+//   * 请求 *bufferLen = 缓冲容量（字节），返回 *bufferLen = 实际写入量；
+//   * 缓冲布局（QSbieAPI GetMonitor 同款，SbieAPI.cpp:3075-3121）：
+//     连续记录 [ULONG size][记录体 size 字节]…以 [ULONG 0] 结尾；记录体 =
+//     [LONGLONG 时间戳 8][ULONG type 4][ULONG pid 4][ULONG tid 4]
+//     [若干 \0 结尾 WCHAR 串][可选 0xFFFF 栈标签区]——解码见 Model/Monitor.h；
+//   * 缓冲必须 8 字节对齐（建议 256*4096，QSbieAPI 同容量）；
+//   * 调用方须非沙箱（02 §6）。原始 NTSTATUS 可读 LastNtStatus()。
+MonitorFetch MonitorGet2(void* buffer8Aligned, ULONG* bufferLen, bool* moreEntries);
+
 // Sandboxie 安装目录（NT/DOS 两式；缓冲 512）
 SbieStatus GetHomePath(std::wstring* ntPath, std::wstring* dosPath);
 

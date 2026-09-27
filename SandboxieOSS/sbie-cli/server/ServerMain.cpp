@@ -16,6 +16,7 @@
 #include "LogPump.h"
 #include "ServerState.h"
 #include "SvcProxy.h"
+#include "TracePump.h"
 #include "../ipcc/SbieIpc.h"
 #include "../../SbieCore/DriverApi/DriverApi.h"
 #include "../../SbieCore/Util/Json.h"
@@ -189,6 +190,8 @@ std::string BuildReplyPayload(const OpResult& r)
 // 一切读/写收敛在本线程。
 // ---------------------------------------------------------------------------
 
+void DiagServer(const char* line);   // 定义于下方（诊断前向）
+
 bool ServeOneRequest(const std::shared_ptr<Connection>& conn,
                      const ipc::FrameHeader& hdr,
                      const std::vector<uint8_t>& payload)
@@ -215,6 +218,15 @@ bool ServeOneRequest(const std::shared_ptr<Connection>& conn,
                     r = OpResult::Fail(SbieStatus::ACCESS_DENIED,
                                        L"shutdown denied: session mismatch");
                 } else {
+                    {
+                        char buf[112];
+                        snprintf(buf, std::size(buf),
+                                 "sbie-cli server: shutdown op from client"
+                                 " pid %lu session %lu",
+                                 (unsigned long)conn->clientPid,
+                                 (unsigned long)conn->clientSession);
+                        DiagServer(buf);
+                    }
                     ServerState::Get().Stop();
                     json::JsonValue d = json::JsonValue::Object();
                     d.set(L"stopping", json::JsonValue(true));
@@ -237,7 +249,7 @@ void WorkerMain(std::shared_ptr<Connection> conn)
         if (ServerState::Get().Stopping())
             break;
 
-        if (!conn->logSubscriber) {
+        if (!conn->logSubscriber && !conn->traceSubscriber) {
             // 常规模式：阻塞读（无推送目标，单线程读写天然安全）
             ipc::FrameHeader hdr;
             std::vector<uint8_t> payload;
@@ -444,6 +456,15 @@ int RunServer(const ServerOptions& options)
                        " to start");
     }
 
+    // 2.5) trace/监控泵（波 D1，04 §20）：MonitorControl/GET2 仅要求非沙箱、
+    //      不依赖 session leader（02 §6）——leader 被他者（SandMan）持有时
+    //      trace 面仍可用
+    if (drv::Loaded() || drv::LoadSbieDll()) {
+        if (drv::DriverAlive() && !StartTracePump())
+            DiagServer("sbie-cli server: trace pump failed to start"
+                       " (monitor control rejected)");
+    }
+
     // 3) 分发表 + SbieSvc 专职线程
     RegisterBuiltinOps();
     StartSvcProxy();
@@ -471,6 +492,7 @@ int RunServer(const ServerOptions& options)
         const DWORD e = GetLastError();
         StopGuardians();
         StopInteractivePump();
+        StopTracePump();
         StopLogPump();
         StopSvcProxy();
         CloseHandle(mutex);
@@ -504,13 +526,25 @@ int RunServer(const ServerOptions& options)
     for (;;) {
         const DWORD w = WaitForSingleObject(ServerState::Get().StopEvent(),
                                             ComputeWaitMs());
-        if (w == WAIT_OBJECT_0)
+        if (w == WAIT_OBJECT_0) {
+            DiagServer("sbie-cli server: stop event set (shutdown op)");
             break;
+        }
+        if (w != WAIT_TIMEOUT) {
+            char buf[96];
+            snprintf(buf, std::size(buf),
+                     "sbie-cli server: main wait failed (gle=%lu)",
+                     (unsigned long)GetLastError());
+            DiagServer(buf);
+            break;
+        }
         // WAIT_TIMEOUT：1s 重估点
         if (ServerState::Get().IdleTimeoutSec() != 0
             && ServerState::Get().ActiveClients() == 0
-            && ServerState::Get().IdleRemainingMs() == 0)
+            && ServerState::Get().IdleRemainingMs() == 0) {
+            DiagServer("sbie-cli server: idle timeout reached");
             break; // 空闲到期（有新客户端竞态连入则本轮不触发）
+        }
     }
     ServerState::Get().Stop(); // 幂等（shutdown op 路径已置位）
 
@@ -527,6 +561,7 @@ int RunServer(const ServerOptions& options)
     // 8) 回收（泵/SvcProxy 以停机事件/quit 标志快速退出）
     StopGuardians();
     StopInteractivePump();
+    StopTracePump();
     StopLogPump();
     StopSvcProxy();
     CloseHandle(mutex);
