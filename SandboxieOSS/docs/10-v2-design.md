@@ -105,7 +105,33 @@
 >   主 ini 生效路径（IniGetPath，零用户态探测）/ImportBox 行状态/
 >   monitor 心跳/注册盒表（别名/路径/用户进程数/锁/任务），表格+--json。
 > - 旗标整理：全局 --wait（exec 布尔）与 --settle <sec>（状态机收敛超时）
->   拆分，消除同名互斥。
+>   拆分，消除同名互斥。>
+> **附录 5（2026-09-28 复测 major N1/N2）**：
+> - **N1（净 ini 首次 exec 必败）已修**：EnsureImportBoxLine 写行后新增
+>   校验回读（驱动 QueryConf 枚举 GlobalSettings\ImportBox 直至目录在
+>   列；退避 50→200ms + 至多 8 次驱动侧 ReloadConf 兜底，上限 10s），
+>   可见后才进缓存写入/注册。净 ini（文件+驱动同步无行）首轮 exec 自测
+>   5/5（删行→unregister 同步→exec：行自动重部署 + rc 精确透传）。
+> - **N2（log -w 投递死点）定位出三层真身并修其二**：
+>   1. **USHORT 截断（根因）**：SbieApi_GetMessage 的 DLL 包装把 Length
+>      截为 USHORT（sbieapi.c:312）——缓冲 65536 字节截断为 0 ⇒ 一切
+>      条目 BUFFER_TOO_SMALL ⇒ 永无投递。修：缓冲 32760 WCHAR
+>      （65520B < 65536）。
+>   2. **巨型条目（>64KB 单串，环内实测约 240 条存量）**：驱动返回
+>      TOO_SMALL 但仍推进游标（api.c:807）——旧实现把 rc!=0 一律当
+>      "空"且 150ms 睡眠 ⇒ 每条 150ms 爬行。修：FetchOne 三态
+>      （Delivered/Empty/TooSmall），TooSmall 立即重试不睡眠。
+>   3. **-w 历史回放**：-w 先前执行完整 dump（含巨型条跳过与整环渲染）
+>      耗时不可控 ⇒ follow 迟迟不启动。修：-w 纯 tail 语义（跳过 dump，
+>      有界 5s 快进到环头后跟随）。
+>   **残留（未关闭，如实记录）**： follower 在环头等待时，新生成的
+>   session-1 事件（事后 dump 证实已入环，序号连续）仍不被投递——
+>   疑 get_next 游标语义在"等待中新增"场景的内核侧行为，冻结驱动无法
+>   追踪。dump 路径（B4 验收面）完全正常。-w 复测 0/5，交测试 agent
+>   以本节取证复核；如确认仍死，建议后续用 SbieSvc 会话（session_id=-1
+>   通道）做日志中继的替代方案。
+> - 附带加固：exec 濒死窗口自愈（monitor 被外杀后残留 task/锁不再死等
+>   STATE_TIMEOUT——首次进入即 EnsureMonitorRunning 收编 stale task）。
 前置阅读：`00-architecture.md`（V1 server 模型，V2 将其废除）、`02-driver-api.md`、
 `03-svc-protocol.md`（仅 proc-start 一项保留 SbieSvc）。
 代码锚点基准：`Sandboxie\core\drv\{conf.c, box.c, api.c, session.c, process.c, conf_expand.c}`、

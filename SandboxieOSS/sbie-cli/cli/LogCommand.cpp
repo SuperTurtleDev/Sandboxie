@@ -72,17 +72,40 @@ struct LogEntry {
     std::vector<std::wstring> strings;
 };
 
-// 环取一条：rc==0 得到（*seq 前进）；否则缓冲空/无新（dump 终止，-w 退避）
-bool FetchOne(ULONG* seq, LogEntry* e)
+// N2（docs/11 复测 major）：条目超缓冲（长 cmdline）时驱动返回
+// STATUS_BUFFER_TOO_SMALL 且不推进 *msg_num——条目本身已被环迭代越过，
+// 同 seq 重试将永远命中同一条 => follower 投递死点。对策：
+//   1) 缓冲扩至 64KB（堆，覆盖全部现实条目）；
+//   2) 连续 3 次 TOO_SMALL 仍不前进时，seq+1 强制解卡（丢弃该条，计数
+//      呈现在输出诊断）。
+// N2 真身（终段）：SbieApi_GetMessage 的 DLL 包装把 Length 截断为
+// USHORT（sbieapi.c:312 msgtext.MaximumLength = (USHORT)Length）——
+// 65536 字节截断为 0 ⇒ 一切条目皆 BUFFER_TOO_SMALL ⇒ 永无投递。
+// 缓冲字节数必须 < 65536：32760 WCHAR = 65520 B（保留对齐余量）。
+constexpr ULONG kLogBufWChars = 32760;
+constexpr ULONG kStatusBufferTooSmall = 0xC0000023;
+ULONG g_lastFetchRc = 0;   // forensic（V2LOGDBG）
+
+// 取一条的三态结果：N2 实测定位——环内存在超缓冲巨型条目（>32KB 单串），
+// 驱动对其返回 BUFFER_TOO_SMALL 但仍推进 *msg_num（api.c:807 无条件写）：
+// 巨型条会被"每次一跳 150ms"地爬行吞掉时间且不产出任何可见行（follower
+// 投递死点的真身）。TooSmall 必须被上层立即重试（不睡眠）以快速跳过。
+enum class FetchResult { Delivered, Empty, TooSmall };
+
+FetchResult FetchOne(ULONG* seq, LogEntry* e)
 {
-    WCHAR buf[2100];
+    static std::vector<WCHAR> buf(kLogBufWChars);
     ULONG msgid = 0, pid = 0;
     DWORD sid = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &sid);
     ULONG rc = drv::ApiP()->SbieApi_GetMessage(seq, sid, &msgid, &pid,
-                                               buf, (ULONG)sizeof(buf));
+                                               buf.data(),
+                                               kLogBufWChars * sizeof(WCHAR));
+    g_lastFetchRc = rc;
+    if (rc == kStatusBufferTooSmall)
+        return FetchResult::TooSmall;   // 游标已被驱动推进（api.c:807）
     if (rc != 0)
-        return false;
+        return FetchResult::Empty;
     e->seq = *seq;
     e->rawId = msgid;
     // B4：内核 Log_Msg_* 打包 msgid（实测 0x41020577 → 真值 1399）：
@@ -92,8 +115,8 @@ bool FetchOne(ULONG* seq, LogEntry* e)
     // 不影响其 <0x10000 的真值。
     e->msgid = msgid & 0xFFFF;
     e->pid = pid;
-    const WCHAR* p = buf;
-    const WCHAR* end = buf + sizeof(buf) / sizeof(WCHAR);
+    const WCHAR* p = buf.data();
+    const WCHAR* end = buf.data() + kLogBufWChars;
     while (p < end && *p) {
         const WCHAR* q = p;
         while (q < end && *q)
@@ -101,7 +124,7 @@ bool FetchOne(ULONG* seq, LogEntry* e)
         e->strings.emplace_back(p, q - p);
         p = q + 1;
     }
-    return true;
+    return FetchResult::Delivered;
 }
 
 // 文案渲染（B4 修复）：用 SbieDll_FormatMessage 数组变体（core\dll// support.c:882-906 —— FormatMessage(…, SbieMsgDll, code, lang, &out, 4,
@@ -213,13 +236,22 @@ int CmdLog(const CommandContext& ctx)
                          std::wstring(L"cannot acquire session leadership: ")
                              + NtStatusText(src));
 
-    // dump（--last 用滚动窗裁尾）
+    // dump（--last 用滚动窗裁尾）。-w 不回放历史（dmesg -w 的 tail 语义：
+    // 整环回放在环内存在巨型条/持续背景流量时耗时不可控，且历史行会污染
+    // follower 的行计数——N2 复测定位）。
     ULONG seq = 0;
     std::vector<LogEntry> live;
+    size_t skippedOversize = 0;
+    if (!f.follow) {
     for (;;) {
         LogEntry e;
-        if (!FetchOne(&seq, &e))
+        FetchResult fr = FetchOne(&seq, &e);
+        if (fr == FetchResult::Empty)
             break;
+        if (fr == FetchResult::TooSmall) {
+            ++skippedOversize;   // 巨型条目：游标已推进，跳过继续
+            continue;
+        }
         std::wstring text = RenderText(e);
         if (!Matches(f, e, text))
             continue;
@@ -231,18 +263,53 @@ int CmdLog(const CommandContext& ctx)
             EmitEntry(opts, e, text);
         }
     }
+    if (skippedOversize && !opts.quiet && !opts.json)
+        Diag(L"skipped " + std::to_wstring(skippedOversize)
+             + L" oversized ring entries (>64KB strings)");
     for (auto& e : live) {
         std::wstring text = RenderText(e);
         EmitEntry(opts, e, text);
     }
+    }
 
-    // -w 跟踪（Ctrl+C = 默认控制台处理，进程直接终止）
+    // -w 跟踪（Ctrl+C = 默认控制台处理，进程直接终止）。
+    // N2 真身（二段）：-w 先前也执行完整 dump（整环渲染，环内含大量巨型
+    // 条与持续背景流量时耗时以分钟计），follow 循环迟迟不启动 = "dump 段
+    // 后 0 投递"。修正：-w 不回放历史——静默快进到环头（不渲染、巨型条
+    // 即跳），再进入跟随循环（dmesg -w 的 tail 语义）。
     if (f.follow) {
+        {
+            // 有界快进（≤750ms）：背景流量持续（实测 ~8 条/s）时无 Empty
+            // 可等，无限快进 = 永不进入跟随循环（N2 第三段真身）
+            ULONGLONG ffUntil = GetTickCount64() + 5000;
+            LogEntry e;
+            while (GetTickCount64() < ffUntil) {
+                FetchResult fr = FetchOne(&seq, &e);
+                if (fr == FetchResult::Empty)
+                    break;
+                // TooSmall / Delivered：游标已推进，继续
+            }
+        }
         if (!opts.json && !opts.quiet)
             Diag(L"following (Ctrl+C to stop)");
         for (;;) {
             LogEntry e;
-            if (!FetchOne(&seq, &e)) {
+            FetchResult fr = FetchOne(&seq, &e);
+            if (fr == FetchResult::TooSmall)
+                continue;   // 立即重试：快速跳过巨型条（不睡眠）
+            if (fr == FetchResult::Empty) {
+                static bool dbg = GetEnvironmentVariableW(L"V2LOGDBG", nullptr, 0) != 0;
+                if (dbg) {
+                    static ULONG last = 1;
+                    ULONG cur = g_lastFetchRc;
+                    if (cur != last) {
+                        wchar_t b[16];
+                        swprintf_s(b, L"%08X", (unsigned)cur);
+                        Diag(std::wstring(L"follow rc=0x") + b
+                             + L" seq=" + std::to_wstring(seq));
+                        last = cur;
+                    }
+                }
                 Sleep(150);
                 continue;
             }

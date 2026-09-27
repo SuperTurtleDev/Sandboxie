@@ -277,3 +277,87 @@ B1-B3 三个竞态 blocker 均出现在"正常使用几分钟内"的窗口（kil
 背靠背重启），且失败形态都是"盒永久卡死需手工救援"，与 V2"无 server 自治"目标
 直接冲突；log（B4）正路径内容不可用。**建议状态：不予通过（blocked），修复 4 个
 blocker 后优先回归 A/D1/F' 三面。**
+
+---
+
+# 复测节 — commit 4067579（构建 03:00:46，2026-09-28 03:04–03:27）
+
+复测范围：仅回归面（4 个原 blocker 专项 + A/D/F 抽样 + R1/R2/R4 + 遗留三项独立
+判断），不做全量。被测二进制 mtime 03:00:46（尺寸 706048）。复测窗口内无外部
+活动（无 testbox/无二进制替换/无 SandMan 自派生）。
+
+## 1. B 组竞态专项复测
+
+| 项 | 轮次 | 结果 | 判定 |
+|---|---|---|---|
+| B1 复现序列（exec --detach ping → kill 单 PID → 归零自动注销） | 15 | **14/15**；每轮 ~30s 全自动注销（= 用户进程口径 + 15s KillAll 兜底触发路径），无 STATE_TIMEOUT 连败、无手工救援 | **修复确认** |
+| B3 teardown 窗口 5 并发 | 新盒 1 + 窗口 3（=20 exec） | **20/20 rc=0**、每轮 5/5 用户进程可见、cache/task/monitor 收敛 1/1/1、零 lock.tmp 报错 | **修复确认** |
+| B2 心跳接管（注入） | 1 次注入 | 挂起 monitor（NtSuspendProcess）→ 心跳 5s 陈旧（>3s 阈）→ 下一次 exec **自动击杀挂起实例（142604）→ 拉起替代（3952）→ rc=0**，替代实例完成后续 teardown | **修复确认（注入验证）** |
+| B4 log 正路径 | dump/--type/--box/--pid/--json 各 1；-w ×2 | 内容**全部可读**（真 1399 + 真实字段串，掩码修复）；--type 13 全命中 0 泄漏；--box 7/7 全含盒名（原泄漏消失）；--pid 单一 pid 精确；--json 合法 NDJSON（msgid+raw_id 双字段）。**但 `-w` follow 死循环：2/2 复现 follower 存活 14s 投递 0 条新事件**（事后 --box 转储证明环内当时新增 7 条 v2t_w2 事件未被投递；dump 段正常） | **部分修复：-w follow 不工作（新发现 N2）** |
+
+## 2. 回归面
+
+| 项 | 结果 |
+|---|---|
+| A 组抽 2 位置 × 5 轮（Downloads + 中文深链） | **10/10**（每轮 ~30s KillAll 兜底路径） |
+| D1 ×1（新盒 5 并发） | 5/5 rc=0、5 进程、monitor=1 |
+| D4 ×1（taskkill monitor → 恢复） | 下一 exec rc=0、monitor 重建（78492）、teardown 正常 |
+| F' 冲突 ×1（monitor 持 leader） | rc=6 并指明占用者 pid 93192（文案正确） |
+| R1 exec 即退 | `exec cmd /c "exit 7"` 默认 **rc=0**（不等待不透传）✓ |
+| R2 --wait 透传 | `--wait` + exit7/exit3 → **rc=7 / rc=3** 精确透传；`--settle 30` 正常；旧式 `--wait 5` 干净报 USAGE(2) "unknown command: 5"（语义变化已文档化）✓ |
+| R4 --password/SBIE_PASS/info | `--password pw` ✓、`SBIE_PASS=pw` ✓、缺值 USAGE=2 ✓；`info` 表格（cli/driver/sbiesvc/main ini/ImportBox present/monitor healthy + 盒表）与 `info --json`（合法对象，cli_version/monitor 字段在）双轨 ✓。注：真实认证拒绝路径未验证（本机生产 SbieSvc 未设 EditPassword，不应为测试去改生产服务配置） |
+
+## 3. 新发现（本次复测撞出，非原 blocker 回潮）
+
+- **N1（确定性 3/3，major）净 ini 首次 exec 必败**：
+  ```
+  sbie-cli: registration not visible after reload: ImportBox line MISSING;
+  cache rolled back (10s) (GENERIC)     rc=1
+  ```
+  复现：删除 `[GlobalSettings] ImportBox=` 行 → 全新盒第一次 `exec` 必失败；
+  第二次 `exec` 成功（行此时已写入）。3/3 确定性。首次部署（EnsureImportBoxLine
+  → ADD_SETTING → ReloadConf → 探测）存在一次写入-可见性时序缺陷；实现方 8/8
+  自测未覆盖（其基线已部署 ImportBox 行）。影响：全新机器/净 ini 的**第一次
+  exec 体验必失败**，自愈于重试。
+- **N2（2/2 复现，major）`log -w` follow 不投递**：follower 存活但 dump 段后
+  0 条新事件（14s 窗口内两次盒 exec 的事件事后在环内可见）。伴随现象：部分
+  条目尾部字符串被截断（`…e"`、`…xieRpcSs.exe"`——环缓冲读取边界疑似与
+  follow 死点同源）。-w 在本次复测范围内为显式测试项 → 计 FAIL。
+
+## 4. 实现方遗留三项的独立判断
+
+1. **R3 tty 分支**：本环境无交互 tty 且生产 SbieSvc 未设 EditPassword，认证
+   提示路径不可触发（非 tty 快速失败文案在代码中存在，V2Commands.cpp:92-160，
+   静态确认）。**标注：待人工**（需真实控制台 + 设密服务）。
+2. **log 文案兜底可读性**：可读性达标——真 msgid + 字段串管道拼接，未知
+   msgid 时回退 `SBIE<id> <strings>` 纯文本；轻微瑕疵为尾部截断串（见 N2）。
+   **可接受（带备注）**。
+3. **-w 长跑内存备案**：代码面 `FormatOf` 按 msgid 缓存格式串（无 free 但
+   有界：不同 msgid 数百级 ≈ 百 KB），follow 循环每条目临时分配即释放，无可见
+   无界增长；14s 实测无异常。**备案设计可接受**——但在 -w follow 修复前该项
+   实际不生效。
+
+## 5. 环境恢复确认（对照复测起始快照 baseline2）
+
+| 项 | 终态 |
+|---|---|
+| `C:\WINDOWS\Sandboxie.ini` | 与 baseline2 **字节级一致**（cmp 通过；ImportBox=0；注：本人清理脚本曾给每行多写一个 \r，已按基线字节级还原） |
+| `%LOCALAPPDATA%\SandboxieOSS` | 整目录删除（复测起始亦不存在） |
+| sbie-cli/monitor 进程 | 0 |
+| SbieSvc / SbieDrv | RUNNING，未动 |
+| SandMan | 未运行（= 复测起始状态；实现方测试遗留的停止态，如需常驻请自行 `-autorun` 拉起） |
+| 生产/被测安装目录 | 双双 diff 零 |
+| 测试目录（含中文深链） | 全部清除 |
+
+## 6. 复测总结论
+
+**四个原 blocker（B1/B2/B3/B4 核心）全部修复确认**（B1 14/15 压测 + KillAll
+兜底实测触发、B2 注入验证接管、B3 20/20、B4 内容/过滤/dump/json 全对）；
+回归面（A/D/F/R1/R2/R4）全部通过；遗留三项判断如上。
+
+但复测范围内出现 **两个新 major**：N1 净 ini 首次 exec 确定性失败（3/3）、
+N2 `log -w` follow 不投递（2/2）——后者为本次显式测试项。二者改动面均小
+（N1=EnsureImportBoxLine 写入后可见性探测时序；N2=FetchOne 序列推进/环读取
+死点）。
+
+**最终结论：FAIL → 退回**（修 N1+N2 后仅需针对这两点微复测，无需全量）。

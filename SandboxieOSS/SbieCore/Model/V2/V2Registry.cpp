@@ -218,6 +218,42 @@ V2Err EnsureImportBoxLine(const std::wstring& password)
                     + StatusName(s)
                     + L"); if an EditPassword is set, add this line manually"
                       L" under [GlobalSettings]: ImportBox=" + dir};
+
+    // N1（docs/11 复测 major）：写入成功 != 驱动可见——服务侧 refresh 的
+    // 落盘与 ReloadConf 存在时序窗口（净 ini 首次 exec 3/3 确定性失败）。
+    // 写后校验回读：经驱动 QueryConf 枚举 GlobalSettings\ImportBox 直至
+    // 我们的目录在列；不可见则退避 + 驱动侧重载（IOCTL），上限 10s。
+    // 可见后才允许进入缓存写入/注册阶段。
+    {
+        auto lineVisible = [&dir]() {
+            std::vector<std::wstring> vals;
+            if (drv::QueryConfList(L"GlobalSettings", L"ImportBox", true, true,
+                                   &vals)
+                != SbieStatus::OK)
+                return false;
+            for (const auto& v : vals)
+                if (_wcsicmp(v.c_str(), dir.c_str()) == 0)
+                    return true;
+            return false;
+        };
+        DWORD waited = 0, delay = 50;
+        int reloads = 0;
+        while (!lineVisible()) {
+            if (waited >= 10000)
+                return {SbieStatus::GENERIC,
+                        L"ImportBox line written but not driver-visible within"
+                        L" 10s (svc write ok, "
+                            + std::to_wstring(reloads) + L" reloads)"};
+            if (waited && waited % 1000 < delay && reloads < 8) {
+                drv::ReloadConf(0, false);
+                ++reloads;
+            }
+            Sleep(delay);
+            waited += delay;
+            if (delay < 200)
+                delay = min(delay * 2, 200u);
+        }
+    }
     return {};
 }
 

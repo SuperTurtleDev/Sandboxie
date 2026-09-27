@@ -269,7 +269,8 @@ int CmdExec(const CommandContext& ctx)
 
     // ---- 状态机（§7.3）----
     bool started = false;
-    bool s6Healed = false;   // S6 幽灵节 heal（单次 ReloadConf）已做？
+    bool s6Healed = false;      // S6 幽灵节 heal（单次 ReloadConf）已做？
+    bool deathHealed = false;   // 濒死窗口自愈（单次确保 monitor）已做？
     DWORD waited = 0;
     for (;;) {
         RegState st;
@@ -327,7 +328,16 @@ int CmdExec(const CommandContext& ctx)
                     started = true;
                     break;
                 }
-                // 濒死窗口：等待重探（teardown 通常 ~1s 内摘锁）
+                // 濒死窗口：等待重探（teardown 通常 ~1s 内摘锁）。自愈：
+                // monitor 被外杀时无人收编残留 task → 永不摘锁 → 本分支
+                // 死等（实测 STATE_TIMEOUT wedge）。首次进入即确保 monitor
+                // 在跑——它会收编 stale task 并按用户进程口径归零 teardown。
+                if (!deathHealed) {
+                    deathHealed = true;
+                    if (!monitor::EnsureMonitorRunning(CurrentExePath()))
+                        Diag(L"warning: cannot ensure monitor during "
+                             L"death-window; waiting");
+                }
             }
         } else {
             if (registered) {
