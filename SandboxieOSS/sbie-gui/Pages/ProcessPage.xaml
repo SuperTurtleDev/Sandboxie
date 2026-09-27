@@ -1,0 +1,106 @@
+<!-- ========================================================================
+  sbie-gui : Sandboxie-OSS WinUI 3 management GUI
+  Copyright (C) 2026 Sandboxie-OSS contributors  SPDX-License-Identifier: GPL-3.0-or-later
+
+  页 1/4 进程管理：管理全局"当前沙盒"的进程。顶部 ComboBox 快速切换沙盒；
+  taskmgr 式进程表格（PID 等宽字体）；工具条：结束进程/全部结束/启动程序/刷新。
+-->
+<Page
+    x:Class="sbie_gui.Pages.ProcessPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:models="using:sbie_gui.Models"
+    NavigationCacheMode="Required">
+
+    <Page.Resources>
+        <Style x:Key="ThinRow" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="16,8,16,12" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页首：标题 + 当前沙盒切换 + 工具条 -->
+        <Grid Grid.Row="0">
+            <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                <TextBlock Text="进程管理" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="当前沙盒：" VerticalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ComboBox x:Name="BoxCombo" MinWidth="200"
+                              ItemsSource="{x:Bind Vm.Boxes, Mode=OneWay}"
+                              DisplayMemberPath="Name"
+                              SelectionChanged="OnBoxComboChanged" />
+                </StackPanel>
+            </StackPanel>
+            <CommandBar HorizontalAlignment="Right" DefaultLabelPosition="Right" IsOpen="False" Background="Transparent">
+                <AppBarButton x:Name="BtnStart" Label="启动程序" Click="OnStartProgram">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE768;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnKillProc" Label="结束进程" Click="OnKillProc" IsEnabled="False">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE71A;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnKillAll" Label="全部结束" Click="OnKillAll">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE74D;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton Label="刷新" Click="OnRefresh">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
+                </AppBarButton>
+            </CommandBar>
+        </Grid>
+
+        <InfoBar Grid.Row="1" IsOpen="{x:Bind Vm.InfoIsOpen, Mode=TwoWay}"
+                 Severity="{x:Bind Vm.InfoSeverity, Mode=OneWay}"
+                 Message="{x:Bind Vm.InfoMessage, Mode=OneWay}" />
+
+        <!-- 表头 -->
+        <Grid Grid.Row="2" Padding="12,4" CornerRadius="4"
+              Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="90" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="76" />
+                <ColumnDefinition Width="160" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="PID" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="1" Text="镜像名" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="2" Text="会话" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="3" Text="启动时间" Style="{ThemeResource CaptionTextBlockStyle}" />
+        </Grid>
+
+        <!-- 进程表 -->
+        <ListView x:Name="ProcList" Grid.Row="3"
+                  ItemsSource="{x:Bind Vm.Procs, Mode=OneWay}"
+                  ItemContainerStyle="{StaticResource ThinRow}"
+                  SelectionMode="Single"
+                  SelectionChanged="OnProcSelectionChanged">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:ProcEntry">
+                    <Grid ColumnSpacing="8" Padding="0,0,4,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="160" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{x:Bind Pid}" VerticalAlignment="Center"
+                                   FontFamily="Cascadia Mono,Consolas" FontSize="12" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Image}" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Image}" />
+                        <TextBlock Grid.Column="2" Text="{x:Bind Session}" VerticalAlignment="Center"
+                                   FontFamily="Cascadia Mono,Consolas" FontSize="12" />
+                        <TextBlock Grid.Column="3" Text="{x:Bind Started}" VerticalAlignment="Center" FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</Page>

@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    sbie-gui - Sandboxie-OSS WinUI 3 management GUI (unpackaged thin shell over sbie-cli.exe)
+    Copyright (C) 2026 Sandboxie-OSS contributors
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    SPDX-License-Identifier: GPL-3.0-or-later
+
+    Unpackaged deployment (per MS Learn "deploy-unpackaged-apps", WinAppSDK 1.8):
+      WindowsPackageType=None            -> no MSIX; enables the official auto-bootstrap
+                                            initializer (calls the bootstrapper API at startup)
+      WindowsAppSdkSelfContained=true    -> the Windows App SDK runtime ships in the app folder,
+                                            so the bootstrap always resolves locally
+      SelfContained=false                -> .NET 8 desktop runtime stays framework-dependent
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>sbie_gui</RootNamespace>
+    <AssemblyName>sbie-gui</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- WinUI 3 does not support AnyCPU; force x64 so plain `dotnet build` works -->
+    <Platform Condition=" '$(Platform)' == '' or '$(Platform)' == 'AnyCPU' ">x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!-- unpackaged + self-contained Windows App SDK -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSdkSelfContained>true</WindowsAppSdkSelfContained>
+    <SelfContained>false</SelfContained>
+    <PublishReadyToRun>false</PublishReadyToRun>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,88 @@
+<!-- ========================================================================
+  sbie-gui : Sandboxie-OSS WinUI 3 management GUI
+  Copyright (C) 2026 Sandboxie-OSS contributors  SPDX-License-Identifier: GPL-3.0-or-later
+
+  页 3/4 沙盒设置：当前选中沙盒的键值表（box dump，多值合并显示）+
+  新增键/编辑选中/删除键（box set 写、cfg unset 按 section 删除）。
+-->
+<local:SettingsPageBase
+    x:Class="sbie_gui.Pages.BoxSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:sbie_gui.Pages"
+    xmlns:models="using:sbie_gui.Models"
+    NavigationCacheMode="Required">
+
+    <local:SettingsPageBase.Resources>
+        <Style x:Key="ThinRow" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+    </local:SettingsPageBase.Resources>
+
+    <Grid Padding="16,8,16,12" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Text="沙盒设置" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                <TextBlock Text="{x:Bind Vm.SelectedBoxName, Mode=OneWay}" VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+            <CommandBar HorizontalAlignment="Right" DefaultLabelPosition="Right" IsOpen="False" Background="Transparent">
+                <AppBarButton x:Name="BtnAdd" Label="新增键" Click="OnAddKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE710;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnEdit" Label="编辑选中" Click="OnEditKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE70F;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnDel" Label="删除键" Click="OnDeleteKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE74D;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton Label="刷新" Click="OnRefresh">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
+                </AppBarButton>
+            </CommandBar>
+        </Grid>
+
+        <InfoBar Grid.Row="1" IsOpen="{x:Bind Vm.InfoIsOpen, Mode=TwoWay}"
+                 Severity="{x:Bind Vm.InfoSeverity, Mode=OneWay}"
+                 Message="{x:Bind Vm.InfoMessage, Mode=OneWay}" />
+
+        <Grid Grid.Row="2" Padding="12,4" CornerRadius="4"
+              Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="设置名" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="1" Text="值（多值合并显示）" Style="{ThemeResource CaptionTextBlockStyle}" />
+        </Grid>
+
+        <ListView x:Name="SettingList" Grid.Row="3"
+                  ItemsSource="{x:Bind Rows, Mode=OneWay}"
+                  ItemContainerStyle="{StaticResource ThinRow}"
+                  SelectionMode="Single"
+                  SelectionChanged="OnRowSelectionChanged">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:SettingRow">
+                    <Grid ColumnSpacing="8" Padding="0,0,4,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="280" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{x:Bind Key}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Merged}" VerticalAlignment="Center" FontSize="12"
+                                   FontFamily="Cascadia Mono,Consolas"
+                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Merged}" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</local:SettingsPageBase>

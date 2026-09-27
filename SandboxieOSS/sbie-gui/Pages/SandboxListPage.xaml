@@ -1,0 +1,143 @@
+<!-- ========================================================================
+  sbie-gui : Sandboxie-OSS WinUI 3 management GUI
+  Copyright (C) 2026 Sandboxie-OSS contributors  SPDX-License-Identifier: GPL-3.0-or-later
+
+  页 2/4 沙盒列表（默认首页）：taskmgr 式表格 + 工具条。
+  行选中 = 设置全局"当前沙盒"；双击行 -> 进程管理页。
+-->
+<Page
+    x:Class="sbie_gui.Pages.SandboxListPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:sbie_gui"
+    xmlns:models="using:sbie_gui.Models"
+    NavigationCacheMode="Required">
+
+    <Page.Resources>
+        <Style x:Key="ThinRow" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+        <MenuFlyout x:Key="BoxFlyout">
+            <MenuFlyoutItem Text="在进程管理中打开" Click="OnCtxOpenProcesses">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE9D9;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutSeparator />
+            <MenuFlyoutItem Text="启用" Click="OnCtxEnable">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE73E;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="禁用" Click="OnCtxDisable">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE738;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutItem Text="重命名…" Click="OnCtxRename">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE8AC;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+            <MenuFlyoutSeparator />
+            <MenuFlyoutItem Text="删除…" Click="OnCtxDelete">
+                <MenuFlyoutItem.Icon>
+                    <FontIcon Glyph="&#xE74D;" />
+                </MenuFlyoutItem.Icon>
+            </MenuFlyoutItem>
+        </MenuFlyout>
+    </Page.Resources>
+
+    <Grid Padding="16,8,16,12" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 页首：大标题 + 右上工具条 -->
+        <Grid Grid.Row="0">
+            <TextBlock Text="沙盒列表" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+            <CommandBar HorizontalAlignment="Right" DefaultLabelPosition="Right" IsOpen="False" Background="Transparent">
+                <AppBarButton x:Name="BtnNew" Label="新建" Click="OnNewBox">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE710;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnRefresh" Label="刷新" Command="{x:Bind Vm.RefreshCommand, Mode=OneWay}">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton x:Name="BtnEnable" Label="启用" Click="OnEnableBox">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE73E;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnDisable" Label="禁用" Click="OnDisableBox">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE738;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnRename" Label="重命名" Click="OnRenameBox">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE8AC;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnDelete" Label="删除" Click="OnDeleteBox">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE74D;" /></AppBarButton.Icon>
+                </AppBarButton>
+            </CommandBar>
+        </Grid>
+
+        <!-- 页顶通知浮层 -->
+        <InfoBar Grid.Row="1" IsOpen="{x:Bind Vm.InfoIsOpen, Mode=TwoWay}"
+                 Severity="{x:Bind Vm.InfoSeverity, Mode=OneWay}"
+                 Message="{x:Bind Vm.InfoMessage, Mode=OneWay}" />
+
+        <!-- 表头 -->
+        <Grid Grid.Row="3" Padding="12,4" CornerRadius="4"
+              Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" />
+                <ColumnDefinition Width="64" />
+                <ColumnDefinition Width="76" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="名称" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="1" Text="启用" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="2" Text="进程数" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="3" Text="文件根路径" Style="{ThemeResource CaptionTextBlockStyle}" />
+        </Grid>
+
+        <!-- 数据表（taskmgr 式：无卡片包裹、细行高、系统 hover/选中） -->
+        <ListView x:Name="BoxList" Grid.Row="4"
+                  ItemsSource="{x:Bind Vm.Boxes, Mode=OneWay}"
+                  ItemContainerStyle="{StaticResource ThinRow}"
+                  SelectionMode="Single"
+                  SelectionChanged="OnBoxSelectionChanged"
+                  DoubleTapped="OnBoxDoubleTapped">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:BoxSummary">
+                    <Grid ColumnSpacing="8" Padding="0,0,4,0" ContextFlyout="{StaticResource BoxFlyout}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="230" />
+                            <ColumnDefinition Width="64" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE7B8;" FontSize="14" VerticalAlignment="Center"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            <TextBlock Text="{x:Bind Name}" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="✓" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                   Visibility="{x:Bind local:XamlHelpers.VisibleWhen(IsEnabled)}" />
+                        <TextBlock Grid.Column="1" Text="✕" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                   Visibility="{x:Bind local:XamlHelpers.CollapsedWhen(IsEnabled)}" />
+                        <TextBlock Grid.Column="2" Text="{x:Bind ActiveProcs}" VerticalAlignment="Center"
+                                   FontFamily="Cascadia Mono,Consolas" FontSize="12" />
+                        <TextBlock Grid.Column="3" Text="{x:Bind FileRoot}" VerticalAlignment="Center" FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind FileRoot}" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</Page>

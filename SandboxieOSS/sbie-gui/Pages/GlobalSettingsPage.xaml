@@ -1,0 +1,105 @@
+<!-- ========================================================================
+  sbie-gui : Sandboxie-OSS WinUI 3 management GUI
+  Copyright (C) 2026 Sandboxie-OSS contributors  SPDX-License-Identifier: GPL-3.0-or-later
+
+  页 4/4 全局设置：顶部系统状态卡（version/status/force/maint，10s 轮询）+
+  GlobalSettings 键值表（cfg dump / cfg set / cfg unset）。
+-->
+<local:SettingsPageBase
+    x:Class="sbie_gui.Pages.GlobalSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:sbie_gui.Pages"
+    xmlns:models="using:sbie_gui.Models"
+    NavigationCacheMode="Required">
+
+    <local:SettingsPageBase.Resources>
+        <Style x:Key="ThinRow" TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+    </local:SettingsPageBase.Resources>
+
+    <Grid Padding="16,8,16,12" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <TextBlock Text="全局设置" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+            <CommandBar HorizontalAlignment="Right" DefaultLabelPosition="Right" IsOpen="False" Background="Transparent">
+                <AppBarButton x:Name="BtnAdd" Label="新增键" Click="OnAddKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE710;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnEdit" Label="编辑选中" Click="OnEditKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE70F;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="BtnDel" Label="删除键" Click="OnDeleteKey">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE74D;" /></AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton Label="刷新" Click="OnRefresh">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE72C;" /></AppBarButton.Icon>
+                </AppBarButton>
+            </CommandBar>
+        </Grid>
+
+        <InfoBar Grid.Row="1" IsOpen="{x:Bind Vm.InfoIsOpen, Mode=TwoWay}"
+                 Severity="{x:Bind Vm.InfoSeverity, Mode=OneWay}"
+                 Message="{x:Bind Vm.InfoMessage, Mode=OneWay}" />
+
+        <!-- 系统状态卡：四行小字，10s 轮询 -->
+        <Border Grid.Row="2" CornerRadius="8" Padding="14,10"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1">
+            <StackPanel Spacing="3">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE946;" FontSize="13"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="{x:Bind Vm.VersionLine, Mode=OneWay}" FontSize="12" />
+                </StackPanel>
+                <TextBlock Text="{x:Bind Vm.StatusLine, Mode=OneWay}" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{x:Bind Vm.ForceLine, Mode=OneWay}" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{x:Bind Vm.MaintLine, Mode=OneWay}" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="3" Padding="12,4" CornerRadius="4"
+              Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="设置名" Style="{ThemeResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="1" Text="值（多值合并显示）" Style="{ThemeResource CaptionTextBlockStyle}" />
+        </Grid>
+
+        <ListView x:Name="SettingList" Grid.Row="4"
+                  ItemsSource="{x:Bind Rows, Mode=OneWay}"
+                  ItemContainerStyle="{StaticResource ThinRow}"
+                  SelectionMode="Single"
+                  SelectionChanged="OnRowSelectionChanged">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:SettingRow">
+                    <Grid ColumnSpacing="8" Padding="0,0,4,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="280" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{x:Bind Key}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Merged}" VerticalAlignment="Center" FontSize="12"
+                                   FontFamily="Cascadia Mono,Consolas"
+                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Merged}" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</local:SettingsPageBase>
