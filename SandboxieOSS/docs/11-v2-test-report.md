@@ -361,3 +361,266 @@ N2 `log -w` follow 不投递（2/2）——后者为本次显式测试项。二�
 死点）。
 
 **最终结论：FAIL → 退回**（修 N1+N2 后仅需针对这两点微复测，无需全量）。
+
+---
+
+# 复测节·第二轮 — commit 4c20782（构建 04:00:20，2026-09-28 04:05–04:08）
+
+微复测范围：仅 N1/N2 两点 + 附带加固（濒死 wedge 自愈）1 轮。被测二进制 mtime
+04:00:20（706048 B）。复测窗口无外部活动。基线快照 baseline3（起始即净：无
+运行目录、ini 无 ImportBox、SandMan 未运行、SbieSvc/SbieDrv RUNNING）。
+
+## T1 — N1 净 ini 首次 exec（≥5 轮）
+
+方法（保证驱动真同步，非仅文件层）：`register` 一次性盒 → 删 ini ImportBox 行
+→ **`unregister` 该盒（此路径只 ReloadConf、不写 ImportBox 行）** → 驱动重读
+ini 后行真正消失 → 全新盒首次 `exec` 验证。
+
+```
+T1 r1: first_exec_rc=0 dur=0s importbox_in_ini=1 out=[started pid ... in box v2t_n1]
+…（r2–r5 同型）
+T1: 5/5 直接成功，ImportBox 行每轮自动重部署
+```
+
+**N1 = PASS（5/5，确定性场景消除；写后校验回读 + 驱动侧重载重试按设计生效）。**
+
+## T2 — N2 dump 路径回归（B4 面不回退）
+
+盒生命周期归零、leadership 空闲后测：
+
+| 子项 | 结果 |
+|---|---|
+| `log --last 10` | rc=0 ✓ |
+| `log --type 13 --last 30` | rc=0，非 13xx 行 0 ✓ |
+| `log --box v2t_n2b --last 40` | rc=0，7 行全部含盒名，0 泄漏 ✓ |
+| `log --pid <盒内PID> --last 80` | rc=0，distinct pid 唯一且正确 ✓ |
+| `log --json --last 5` | rc=0，全 `{…}` NDJSON ✓ |
+| `skipped N oversized` 诊断 | 本轮环内未触发（计数为 0 时不打印——条件诊断，代码文案合理；未获实证样本，如实注明） |
+
+**N2 dump 面 = PASS（B4 无回退）。**
+
+## T3 — `-w` 行为
+
+- **T3a 快进语义：PASS** —— 启动 4s 时输出仅 2 行（`following (Ctrl+C to
+  stop)` + 一条调试行），**不再回放历史整环**（修复前首启即 dump 242 行），
+  直接进入跟随态。
+- **T3b 等待中新增：残留仍在（如实记录，标注"已知残留待方案拍板"）**——
+  follower 存活（Y），12s 内投递 **0** 条新事件；事后 `--box` 转储证明环内同
+  窗口新增 ≥3 条本盒事件。取证（实现方新增的 V2LOGDBG 调试面，有效）：
+
+  ```
+  follow rc=0x8000001A seq=5981      ← 唯一一条且不再变化
+  ```
+
+  `0x8000001A = STATUS_NO_MORE_ENTRIES`（win32_ntddk.h:49；api.c:759 在
+  `log_buffer_get_next` 返回 NULL 时置此）——**seq 冻结在 5981 且驱动对
+  后续新条目持续返回"无更多"**，实现方"内核侧游标行为"的怀疑被实测证实。
+  驱动冻结（5.73.5）无法内核级取证；替代方案（经 SbieSvc `session_id=-1`
+  中继）交用户拍板，不阻塞评审。
+
+## T4 — 附带加固：exec 濒死窗口自愈（1 轮）
+
+场景构造：盒运行中 → taskkill monitor（残留 stale cache+task+lock）→
+kill-box（进程全灭且无人 teardown）→ 立即 `exec`。
+
+```
+T4: death-window exec rc=0 dur=6s（新 monitor 49780 收编 stale task →
+    teardown → S0 重注册 → spawn）；终态 teardown ok
+```
+
+**自愈加固 = PASS**（该场景在修复前为 STATE_TIMEOUT 死等 wedge）。
+
+## 环境恢复确认（对照 baseline3）
+
+ini 与 baseline3 **字节级一致**（ImportBox=0；本轮清理复用基线副本还原，无上
+轮的 \r 事故）；`%LOCALAPPDATA%\SandboxieOSS` 整目录删除；无 sbie-cli/monitor
+进程；SbieSvc/SbieDrv RUNNING 未动；生产/被测安装目录双双 diff 零；测试目录全
+清；SandMan 未运行（= 复测起始态）。
+
+## 最终判定：达到"进入挑刺评审"门槛（PASS）
+
+依据：
+1. 四个原 blocker（B1/B2/B3/B4 核心）经上一轮压测/注入验证全部修复确认；
+2. N1 确定性首跑失败已消除（本轮 5/5，驱动真同步场景）；
+3. N2 主消费路径（dump + 过滤 + JSON）零回退，`-w` 已收敛为**单一、边界清晰、
+   取证完整**的残留（内核游标 STATUS_NO_MORE_ENTRIES 冻结；快进 tail 语义与
+   follower 存活行为正确），且备选方案（SbieSvc 中继）已成型待拍板——按
+   "残留备案不阻塞"的交付约定，不再构成退回理由；
+4. 附带加固（濒死自愈）1/1 验证通过。
+
+**带入挑刺评审的清单**：① `-w` 等待中新增残留（待 SbieSvc 中继方案拍板，
+建议作为评审首项）；② R3 tty 交互认证仍待人工（需真 tty + 设密服务）；
+③ 小疵：LogCommand 快进上限注释写"≤750ms"而代码为 5000ms（注释/实现不一）；
+oversized 诊断文案未经实证样本（本轮环内无巨型条目）；④ 上轮 minor 清单中
+未随本轮处理的项（Diag 无条件 stderr、瞬态多 monitor 窗口差等）顺延。
+
+---
+
+# 挑刺评审节 — V2 全量（4067579+4c20782 累积差异；评审于 4c20782 之后）
+
+- 评审对象：`sbie-cli\**` 与 `SbieCore\` 的 V2 相关部分（两 commit 累积 diff：
+  +5488/-22937 行，104 文件）；对照 docs\10（设计/决策）、docs\02/03（冻结接口）。
+- 评审面：①代码不规范 ②注释风格 ③过度实现（KISS）④忽视 SVC/驱动接口。
+- 全部修复经 `cmd //c build_oss.bat`（/W4 /WX）构建 0 error 验证（BUILD SUCCEEDED）。
+- 冲突核对：SBIE_INI 写路径/进程操作/IOCTL 旗标姿势逐点核对 docs\02/03 与
+  vendor 驱动源码，未发现"绕开 SbieSvc 自造轮子"类接口误用（详见"接口面核对"）。
+
+## Blocker 修复清单（已修 + 构建验证）
+
+| # | 位置 | 问题 | 修复 |
+|---|---|---|---|
+| F1 | `sbie-cli/cli/V2Commands.cpp:300-310` | **exec S3/S4 濒死判据与 monitor 分叉**（B1"单一判据"违背复发）：手写枚举循环只排除 RpcSs/DcomLaunch 两个镜像（`BoxUserProcessCount` 排除五个），且 `QueryProcessById` 瞬态失败按"非用户进程"处理（V2Common 同场景按"用户进程"保守计）——两处口径漂移正是 docs\11 blocker-1 双判据死锁的同类隐患（仅剩 BITS/WUAU/Crypto 滞留时 exec 会误判 anyUser=true 直启） | 改调 `BoxUserProcessCount`（枚举失败也保守视为有用户进程），与 monitor 归零判定同源 |
+| F2 | `sbie-cli/cli/V2Commands.cpp`（exec 尾部 + 盒内分支） | **`--wait` 退出码 TOCTOU**：先 `CloseHandle(rr.hProcess)` 再按 pid `OpenProcess` 重开——子进程在两步之间退出则句柄取不到，退出码恒回 0（真实码丢失）；且重 spawn 成功路径（早夭自愈分支的两个 return）**泄漏 rr.hProcess** | 全部路径直接等待已持有句柄后再关闭；respawn 分支补关句柄 |
+| F3 | `SbieCore/Model/V2/V2Registry.cpp:45-58` | **AliasMutex 超时后假持有**：`WaitForSingleObject` 返回值被丢弃，`held()` 只看句柄非空——3s 超时后无锁读-改-写 aliases.json，且析构在未持有的互斥体上 `ReleaseMutex` | 记录等待结果，`held()` 按 `WAIT_OBJECT_0/WAIT_ABANDONED` 判定 |
+| F4 | `sbie-cli/cli/LogCommand.cpp:75-88, 278` | **带入项③之一 + 同类**：快进注释"≤750ms"与代码 5000ms 矛盾；上一段 N2 注释仍在描述**已删除的**"连续 3 次 TOO_SMALL → seq+1 强制解卡"机制与"缓冲扩至 64KB"（实际 32760 WCHAR/65520B）——历史修复叙事残留、与现行三态逻辑自相矛盾 | 注释重写为现行行为（两层真身 + ≤5s 快进） |
+| F5 | `SbieCore/SvcClient/SvcClient.{h,cpp}`（-438 行） | **KISS 红线·死代码**：ImBox/MountManager 五函数组（~190 行）零调用方——V1 img 命令组在本 diff 中删除后成孤儿；且 docs\03 §7 明文 MSGID_IMBOX_\* "许可证禁用，不做"。另 IniGetUser/IniGetSetting/TestPassword/SuspendResume/SuspendResumeAll/GetProcInfo 六个便捷函数同样零调用方（docs\10 §12.1 冻结面="仅 RunSandboxed"+附录 3/4 扩展） | 全部删除；头注释从 V1"给 server 波次 agent"叙事改为 V2 实际调用面清单（vendor wire 头保留不动） |
+| F6 | `sbie-cli/cli/V2Commands.cpp:544` + `sbie-cli/monitor/MonitorMain.cpp:107` | **只写不读的 `<box>.dead` 墓碑协议**：R1 改反应式自愈时删除了唯一的读取方（S0 结算退避），两处写入与"供下一个 exec 读取"的过期注释成为 write-only 死协议，且 monitors\ 目录无限累积墓碑 | 删除两处写入与过期注释，留一行说明指向现行机制 |
+| F7 | `SbieCore/Model/V2/V2Cache.cpp:90-110` | **`DeleteBoxCache` 的 tmp 清扫已死**：仍删固定名 `<box>.ini.tmp`——B3 修复后 `WriteTextFileAtomic` 改用 `<path>.<pid>.<tick>.tmp` 唯一名，旧名永不存在；docs\10 §6.2 设计的"顺手清 >10min 的 \*.tmp 残骸"实际未实现（崩溃残骸永不清） | 改为 `FindFirstFileW(<box>.ini.*.tmp)` 模式清扫，mtime>10min 才删（不碰并发写者在途文件） |
+| F8 | `SbieCore/Model/V2/V2Template.cpp:96-110` | **类别扫描漏过 "."/".."**：裸名模板解析枚举 `<root>\*` 时未排除 `.`/`..` 目录项——`root\.\name.ini`（根级文件）与 `root\..\name.ini`（**模板根的上级目录**）会被当作合法候选，违背 §3.1"类别=一级子目录"且把解析面扩到根外 | 枚举循环跳过 `.`/`..` |
+| F9 | `sbie-cli/monitor/MonitorMain.cpp:31-42` | **MLog 死脚手架**：`static HANDLE sFile` 永不保持非空（每行日志重复尺寸检查），超限时先 CREATE_ALWAYS 截断创建再 DeleteFileW 再 OPEN_ALWAYS 重建——三步冗余且静态句柄具误导性 | 化简为"超 1MB 直接 DeleteFileW，追加打开自会重建"（行为等价） |
+| F10 | `SbieCore/Model/V2/V2Cache.cpp`（ValidateCacheFile/WriteBoxCache）+ `V2Registry.cpp:300` | **退出码 12（CACHE_INVALID）为死码**：Status.h 定义、StatusName 有名、`--help` 文案承诺"12 cache/registration failure"、docs\10 §9.2 冻结表有此码——但全树无一处产生（自检失败报 7、缓存写失败报 1），契约三处承诺落空 | 缓存自检/缓存写失败改报 CACHE_INVALID(12)；reload NTSTATUS 失败保留原 NTSTATUS 映射（更精确，见 style-S9） |
+| F11 | `sbie-cli/cli/Cli.cpp:149-150` + `Cli.h`/`Commands.h`/`V2Commands.cpp` 头注释 | **过期注释与代码矛盾（同类清扫）**：Cli.cpp 沙箱自检处两行重复注释（首行"CLI 不得在沙箱内运行"与次行"仅 exec 允许"直接矛盾）；Cli.h/Commands.h/V2Commands.cpp 仍写"命令面仅五命令"（附录 2/4 后实为 9） | 删矛盾行、更新为实际命令面 |
+| F12 | `SbieCore/Model/V2/V2Common.cpp:332` | 命名不规范：`kBootStrapImages` → `kBootstrapImages`（拼写） | 改正 |
+
+## Style 清单（建议，未改或仅记录）
+
+- S1 `Cli.cpp:165-171` + `Commands.cpp`：命令注册表仍是 V1 的两级 map
+  （command→sub→handler，sub 恒空串）+ `kV2Commands` 数组二次抄写同一清单
+  ——平铺命令面单层 map 即可，新增命令要改两处（V1 残留框架，建议下轮收敛）。
+- S2 `Route()` 以 -1/-2 哨兵混入命令退出码值域（`Run` 再翻译）——可读性味。
+- S3 `V2Commands.cpp EnsureImportBoxLine 调用侧`："我们的 boxes 目录是否在
+  ImportBox 值列表"的 6 行判定在 V2Registry×2 / InfoCommand / RegisterBox 诊断
+  共 4 处重复，可提一个 `ImportBoxLineVisible()` helper。
+- S4 `docs/10 §9.1`"alias 缺省 = 盒名小写"未实现（`register PATH` 不带 alias
+  参数时不建默认别名）——实现是合理简化（别名纯显式），但与冻结设计文档矛盾，
+  建议 docs\10 补一句偏差记录（本次未改行为，避免影响已测行为面）。
+- S5 `docs/10 §4.5` aliases.json 示例为对象映射形态，实现为
+  `{"aliases":[…]}` 数组形态（理由注释在 `V2Registry.cpp LoadAliasesNoLock`），
+  决策散在代码而非 docs——建议 docs\10 附录补记（形态差异对消费者不可见，纯文档事）。
+- S6 `V2Template.cpp ResolveTmplVar` 深度上限 4、`TemplateRoots` env 缓冲 2048、
+  `NormalizeDirPath` 缓冲 MAX_PATH\*2——均为静默截断/失败边界，量级无害，记录在案。
+- S7 `TemplateMigrate.cpp WriteUtf8File` 与 `WriteTextFileAtomic` 近重复
+  （无 BOM、非原子）——一次性迁移工具可接受。
+- S8 `TemplateMigrate.cpp:12` 注释笔误"Maxthus2"（应为 Maxthon2）。
+- S9 退出码分类学残留：`RegisterBox` 的"registration not visible after reload
+  （10s）"仍报 GENERIC(1)——按 docs\10 §9.2 字面更像 STATE_TIMEOUT(10)；因该
+  路径 N1 修复后实际不可达且测试已记录 rc=1 信封，未动，记录备查。
+- S10 `CmdPs`/`CmdKillBox` 对多余参数静默忽略（不报 USAGE）。
+
+### 隐藏功能/内部旗标判定（评审面③专项）
+
+- **`--set-password` / `--ini-del`：判定 = 留**。理由：docs\10 附录 4 已
+  备案（R2/R3 测试与运维用）；全部经 SbieSvc 官方通道（SET_PASSWORD /
+  DEL_SETTING），非旁路；各 ~20 行、main.cpp 截获不进命令注册表；无它们则
+  EditPassword 机器上 ImportBox 行部署的手工指引无法机内执行。属"有备案的
+  最小运维面"，不违 KISS。
+- **`V2LOGDBG`：判定 = 留**（见 note-N4，-w 残留问题的取证面）。
+- **`--monitor` 调参四旗标（--poll-ms 等）：判定 = 留**——docs\10 §8.1 规格
+  内（手动调参调试），OPEN-5 拍板项。
+- **`--sbie-dll-path`：判定 = 留**——docs\02 §1 加载规范的一部分（显式路径
+  解析依赖），测试面亦在用。
+- 未发现清单外的隐藏入口（`--migrate-templates` 有 M5 备案）。
+
+## Note 清单（记录，不动）
+
+- N1 `V2Template g_rootsOverride` 全局可变无锁——CLI/工具均单线程使用，安全；
+  若未来多线程化需先收口。
+- N2 monitor 就绪事件：旧实例死亡到新实例创建之间，若有 exec 持有打开的事件
+  句柄，`readyOrWait` 可能读到残留 signaled 状态（窗口极窄，B2 心跳判定已兜底）。
+- N3 `EnsureMonitorRunning`：挂起 monitor 的 status 文件损坏（pid 读不出）时
+  不会击杀、直接拉新实例（新实例 2s 互斥体超时退出）→ 该会话仍停摆；触发条件
+  为"挂起+文件损坏"双重小概率，维持现状。
+- N4 `V2LOGDBG` 隐藏调试环境变量（follow 循环 rc 取证）：保留——-w 残留问题
+  的唯一取证面，测试 agent 实际使用过；已在此备案。
+- N5 USHORT/WORD 强转全扫：仅 SvcClient 的 PORT_MESSAGE 字段（≤288B，固有
+  USHORT 位宽）与常量端口名——无 N2 同类截断隐患。
+- N6 `FileReadAll` 对奇数字节的 UTF-16LE 静默截尾、`ParseIniFile` 容忍节头
+  行尾杂字符（"[a]b]"取"a"）——解析器宽松边界，无实际危害。
+- N7 `LockCreatorDead` 以 `ERROR_INVALID_PARAMETER` 近似"PID 从未存在"——
+  注释已声明近似语义，仅诊断用途。
+
+## 接口面核对（评审面④，逐点过堂结论）
+
+逐点核对 docs\02/03 与 vendor 源码，**未发现需要修复的接口误用**：
+
+1. **ini 写路径**：ImportBox 行部署走 `SbieSvc MSGID_SBIE_INI ADD_SETTING`
+   （EnsureImportBoxLine），组包对齐 `CheckRequest`（h.length 下限/value 尾零/
+   password≤64 显式校验）——正路，无用户态三层探测复辟。
+2. **进程操作**：kill/kill-box → `MSGID_PROCESS_KILL_ONE/ALL`；exec →
+   `MSGID_PROCESS_RUN_SANDBOXED`（env 继承、变长区 ofs/len 布局对齐 QSbieAPI、
+   hThread 即收 hProcess 交调用方）；无自造 IOCTL 杀进程。
+3. **IOCTL 旗标**：注册探测 `QueryConf(NO_GLOBAL|NO_TEMPLS|NO_EXPAND)` 与
+   docs\10 §6.4 一致；GlobalSettings\ImportBox 枚举不带 NO_GLOBAL（本节即全局
+   节）正确；`ReloadConf((ULONG)-1, 0)` 符合 docs\02 §3.4。
+4. **LPC 线程亲和**：全部请求经 SvcClient 单 mutex 串行（CLI/monitor 均单
+   线程调用），满足 docs\03 §1；分块收发/序号机制与 §2 逐条对齐。
+5. **GetMessage/领导权**：先查后设姿势正确（set 传 (0,nullptr) 对齐封装版
+   语义，docs\02 坑 2）；缓冲 65520B 避开 USHORT 截断。
+6. **挂载/IMBOX**：无任何调用（死客户端已删，见 F5）。
+7. **冻结组件语义**：ReloadConf 拒绝盒内调用者已在 Cli.cpp 自检正确处理
+   （仅 exec 放行，走"自身盒"快速路径，CallerInSandbox 语义）。
+
+## 带入项结论
+
+### ① `-w` 等待中新增残留 → SbieSvc session_id=-1 中继方案：**搁置（不建议采纳）**
+
+实读冻结驱动源码定论（`Sandboxie/core/drv/api.c:721-735` + `log_buff.c:120-141`）：
+
+- "服务特权"= `PsGetCurrentProcessId() == Api_ServiceProcessId`（且
+  `session_id==-1` 收全部会话条目）——**该特权只属于 SbieSvc 进程自身**，
+  非任何客户端可借用的"通道"；非服务调用者只能读"自己是 leader 的本会话"。
+- 冻结 SbieSvc 协议（msgids.h 全量盘点）**不存在任何日志中继 MSGID**
+  （0x1100-0x1F00 全组核对）——"经 SbieSvc 中继"必然要求修改冻结的 SbieSvc
+  （新增 handler），违背"冻结组件不可改"约束。工作量估计因此无意义
+  （若约束解除：SbieSvc 新 handler + 泵 + 客户端 ≈ 2-3 天 + 回归，但即属
+  改冻结件，需用户先改政策而非改代码）。
+- 根因定性（供后续拍板）：follower 死点是 `log_buffer_get_next` 的"最新条
+  ==游标 → 空"判定与会话过滤跳过（`continue` 丢弃步进进度、`*msg_num` 仅在
+  Delivered/TOO_SMALL 时写回）的组合——游标可滞留在环已弹出水位之下，
+  客户端对同一游标重试永远得到 NO_MORE_ENTRIES。
+- **更廉价的客户端侧备选（建议采纳方向，待拍板后实施）**：饥饿重锚——follower
+  连续 N 次 NO_MORE_ENTRIES 后把游标重置为 0 重扫（`get_next(0)` 对陈旧游标
+  会退回"返回最旧条目"分支，这正是客户端唯一能撬动游标的杠杆），按 seq 去重
+  补投递；LogCommand 内约 20 行，不动任何冻结组件。当前交付维持"-w 备案残留
+  + dump 路径可用"现状。
+
+### ② R3 tty 交互认证：**实现完备，达到可人工验证状态**
+
+`V2Commands.cpp ReadPasswordFromTty/RegisterBoxWithAuth` 链路逐项核对：
+`GetConsoleMode` 探测 tty（管道/重定向正确落非 tty 失败分支）✓、回显关闭并在
+失败路径同样恢复模式 ✓、CR/LF 剥离与空密码拒绝 ✓、重试恰一次 ✓、触发条件
+WRONG_PASSWORD→ACCESS_DENIED 折叠（Status.cpp:43 实读）✓、非 tty 失败信封带
+`--password`/`SBIE_PASS` 指引 ✓。维持"待人工"（需真实控制台 + 设密 SbieSvc），
+无代码缺口。
+
+### ③ 两小疵：**均已处理**
+
+- 750ms/5000ms 注释矛盾：已修（F4，`LogCommand.cpp:278`，注释改"≤5s"并引
+  docs\10 附录 5）。
+- oversized 诊断无实证样本：代码面复核——计数>0 才打印（条件诊断）、文案
+  "(>64KB strings)"与 65520B 缓冲语义相符，**代码无需改**；样本缺口属环境
+  事实（本轮环内无巨型条目），如实维持"未经实证"备案，不视为缺陷。
+
+### ④ 上轮 minor 逐项判定
+
+| 项 | 判定 | 理由 |
+|---|---|---|
+| minor-4 `Diag()` 无条件 stderr | **留** | 调用面全部是异常事件告警（teardown 警告/早夭自愈/monitor 拉起失败），stderr 告警是 CLI 正道；噪音敏感处（"following…"）已判 `!quiet`。测试方受扰的根因是 B 组墓碑告警高频出现，F6/R1 后该告警源已消失 |
+| minor-1 瞬态多 monitor（2-3 实例 ~2s） | **留** | CreateMutex+2s 等待的接管窗口固有代价，落败实例静默退出 0、无副作用；B2 心跳机制已覆盖"挂起实例"真危害面。属设计内行为，与"每会话至多一个"表述的窗口差建议 docs\10 一句话备注 |
+| minor-2 D2 r6 单发超时 | **闭环** | 疑因族（B2 挂起/B3 tmp 独占）均已修复且复测通过；未复现，不再追踪 |
+| minor-3 背靠背 ~7-8s 墓碑退避 | **留** | R1 已把守卫从阻塞改为反应式（exec 立即返回），残余代价仅早夭重 spawn 的 4s 结算等待，是上游注入结算期的物理约束 |
+| minor-5 kill 后 exec 透传 4 未文档化 | **备案** | TerminateProcess 语义（被杀子进程退出码=4）；kill 命令输出已提示"may trigger auto-unregister"，此处补记于本节即视为文档化 |
+| minor-6 盒内自举服务为生产 Plus 镜像 | **留** | 部署事实（同 ABI 5.73.5）；OSS dist 自带服务镜像属打包议题，非代码问题 |
+| minor-7 测试窗口外部活动 | **不适用** | 评审窗口无外部活动 |
+
+## 评审结论
+
+四类评审面过堂完毕：**blocker 12 项全部修复并构建验证**（其中代码行为修复
+F1/F2/F3/F7/F8 各有真实 bug 风险；F5/F6 为 KISS 红线死代码清除 -438 行）；
+style 10 项、note 7 项记录在案；SVC/驱动接口面零误用。带入四项：①中继方案
+搁置（附驱动源码级依据 + 更廉价的客户端重锚备选）、②tty 链路完备待人工、
+③两小疵闭环、④minor 逐项判定如上。
+
+**V2 代码面达到交付标准**；遗留事项均属"拍板类"（-w 后续方案、docs\10 两处
+文档偏差补记）而非代码缺陷。
+

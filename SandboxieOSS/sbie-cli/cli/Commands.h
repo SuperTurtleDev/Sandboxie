@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Sandboxie-OSS contributors
 //
-// V2 命令面（docs/10-v2-design.md §9；V1 命令已整体删除——拍板 D4）：
-//   exec | register | unregister | sync-config | ps
+// V2 命令面（docs/10-v2-design.md §9 + 附录 2/4；V1 命令已整体删除——
+// 拍板 D4）：
+//   exec | register | unregister | sync-config | ps | kill-box | kill | log | info
 // 加内部入口：--monitor（main.cpp 截获）、--migrate-templates（M5 迁移工具）。
 
 #pragma once

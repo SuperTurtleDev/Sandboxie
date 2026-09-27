@@ -40,23 +40,28 @@ bool RawQueryConf(const std::wstring& section, const std::wstring& setting,
     return rc >= 0 && !value->empty();
 }
 
-// alias 索引互斥（RAII）
+// alias 索引互斥（RAII）。注意：WaitForSingleObject 超时不持有所有权——
+// held() 必须按等待结果判定，否则超时后会无锁读-改-写并在未持有的互斥体
+// 上 ReleaseMutex
 struct AliasMutex {
     HANDLE h = nullptr;
+    bool own = false;
     explicit AliasMutex(DWORD timeoutMs)
     {
         h = CreateMutexW(nullptr, FALSE, L"Local\\SbieOSS_AliasLock");
-        if (h)
-            WaitForSingleObject(h, timeoutMs);
+        if (h) {
+            DWORD w = WaitForSingleObject(h, timeoutMs);
+            own = (w == WAIT_OBJECT_0 || w == WAIT_ABANDONED);
+        }
     }
     ~AliasMutex()
     {
-        if (h) {
+        if (own)
             ReleaseMutex(h);
+        if (h)
             CloseHandle(h);
-        }
     }
-    bool held() const { return h != nullptr; }
+    bool held() const { return own; }
 };
 
 std::vector<AliasEntry> LoadAliasesNoLock()
@@ -291,7 +296,7 @@ V2Err RegisterBox(const std::wstring& box, const std::wstring& boxDir,
 
     V2Err e = WriteBoxCache(box, boxDir, ini, ex.kv, ex.applied);
     if (!e.Ok())
-        return {SbieStatus::GENERIC, L"cache: " + e.msg};
+        return e;   // 缓存写/自检失败（docs/10 §9.2 码 12 = CACHE_INVALID）
 
     e = ReloadDriverConf();
     if (!e.Ok())

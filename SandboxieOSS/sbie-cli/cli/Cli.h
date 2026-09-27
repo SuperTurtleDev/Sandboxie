@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Sandboxie-OSS contributors
 //
-// V2 argv 解析与路由（docs/10-v2-design.md §9）。命令面仅五命令（拍板 D4）。
+// V2 argv 解析与路由（docs/10-v2-design.md §9；命令面经附录 2/4 扩展）。
+// V1 命令面已整体删除（拍板 D4）。
 // 通用选项：--json / --quiet(-q) / --wait <sec> / --verbose / --sbie-dll-path <dir>
 // / --help(-h)。exec 另有 --detach（命令级）。
 

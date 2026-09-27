@@ -232,7 +232,11 @@ V2Err LoadTemplate(const std::vector<std::wstring>& roots, const std::wstring& r
             HANDLE h = FindFirstFileW((root + L"\\*").c_str(), &fd);
             if (h != INVALID_HANDLE_VALUE) {
                 do {
-                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                    // 类别 = 一级子目录（§3.1）；"."/".." 会把根级/根上级
+                    // 的同名 ini 混进候选，排除
+                    if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                        && _wcsicmp(fd.cFileName, L".") != 0
+                        && _wcsicmp(fd.cFileName, L"..") != 0) {
                         std::wstring p = root + L"\\" + fd.cFileName + L"\\"
                                          + name + L".ini";
                         if (PathExists(p))

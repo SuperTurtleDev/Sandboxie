@@ -30,26 +30,14 @@ namespace {
 
 void MLog(const std::wstring& line)
 {
-    static HANDLE sFile = nullptr;
+    // 超 1MB 轮转：直接删除，随后的 OPEN_ALWAYS 重建空文件（逐行开关
+    // 追加句柄，无持久句柄可言）
     const std::wstring path = model::v2::MonitorLogPath();
-    if (!sFile) {
-        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            WIN32_FILE_ATTRIBUTE_DATA fad;
-            if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad)
-                && (((unsigned long long)fad.nFileSizeHigh << 32)
-                        + fad.nFileSizeLow)
-                       > (1ull << 20)) {
-                sFile = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-                                    nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                                    nullptr);
-                if (sFile != INVALID_HANDLE_VALUE) {
-                    CloseHandle(sFile);
-                    sFile = nullptr;
-                }
-                DeleteFileW(path.c_str());
-            }
-        }
-    }
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad)
+        && ((((unsigned long long)fad.nFileSizeHigh << 32) + fad.nFileSizeLow)
+            > (1ull << 20)))
+        DeleteFileW(path.c_str());
     HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE)
@@ -116,20 +104,8 @@ bool TeardownBox(const model::v2::TaskEntry& t)
         MLog(L"  warning: registration still visible after 10s (cache file absent, "
              L"next reload will clear)");
     model::v2::DeleteTask(t.box);
-    // 墓碑：记录"该盒刚被注销"。下一个 exec 读到且 <8s 时等待结算——
-    // 实测：盒注销后约 2-6s 的结算窗口内重新 spawn，子进程会因底层注入
-    // 状态未清而静默夭折（日志仅见历史性 SBIE2181）。exec 侧确定性退避。
-    {
-        HANDLE h = CreateFileW((model::v2::MonitorsDir() + L"\\" + t.box + L".dead").c_str(),
-                               GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            std::string ts = util::WideToUtf8(model::v2::NowIsoTimestamp());
-            DWORD got = 0;
-            WriteFile(h, ts.data(), (DWORD)ts.size(), &got, nullptr);
-            CloseHandle(h);
-        }
-    }
+    // （无 <box>.dead 墓碑：R1 起结算窗口由 exec 侧 spawn 后探活反应式自愈
+    // 处理，墓碑无读取方）
     MLog(L"teardown done for '" + t.box + L"'");
     return true;
 }

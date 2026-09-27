@@ -329,7 +329,7 @@ size_t BoxUserProcessCount(const std::wstring& box, V2Err* err)
             *err = {s, L"EnumBoxProcesses failed for " + box};
         return SIZE_MAX;
     }
-    static const wchar_t* kBootStrapImages[] = {
+    static const wchar_t* kBootstrapImages[] = {
         L"SandboxieRpcSs.exe", L"SandboxieDcomLaunch.exe", L"SandboxieBITS.exe",
         L"SandboxieWUAU.exe", L"SandboxieCrypto.exe",
     };
@@ -341,7 +341,7 @@ size_t BoxUserProcessCount(const std::wstring& box, V2Err* err)
             continue;
         }
         bool service = false;
-        for (const wchar_t* img : kBootStrapImages)
+        for (const wchar_t* img : kBootstrapImages)
             if (_wcsicmp(pq.image.c_str(), img) == 0) {
                 service = true;
                 break;

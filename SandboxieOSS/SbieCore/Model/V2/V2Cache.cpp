@@ -43,7 +43,7 @@ V2Err WriteBoxCache(const std::wstring& box, const std::wstring& boxDir,
     std::string text = BuildCacheText(box, boxDir, sandboxIniPath, kv, appliedTemplates);
     V2Err e = WriteTextFileAtomic(CachePathFor(box), text);
     if (!e.Ok())
-        return {SbieStatus::GENERIC, L"cache write failed: " + e.msg};
+        return {SbieStatus::CACHE_INVALID, L"cache write failed: " + e.msg};
     return ValidateCacheFile(box, boxDir);
 }
 
@@ -53,26 +53,28 @@ V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir)
     IniFileData ini;
     V2Err e = ParseIniFile(path, &ini);
     if (!e.Ok())
-        return {SbieStatus::INVALID, L"cache self-check: " + e.msg};
+        return {SbieStatus::CACHE_INVALID, L"cache self-check: " + e.msg};
     if (ini.sections.size() != 1)
-        return {SbieStatus::INVALID, L"cache self-check: must be exactly one section"};
+        return {SbieStatus::CACHE_INVALID,
+                L"cache self-check: must be exactly one section"};
     const IniSectionData& sec = ini.sections[0];
     if (_wcsicmp(sec.name.c_str(), box.c_str()) != 0)
-        return {SbieStatus::INVALID, L"cache self-check: section name != box name"};
+        return {SbieStatus::CACHE_INVALID,
+                L"cache self-check: section name != box name"};
     bool haveRoot = false;
     for (const auto& kv : sec.entries) {
         if (_wcsicmp(kv.key.c_str(), L"Template") == 0)
-            return {SbieStatus::INVALID,
+            return {SbieStatus::CACHE_INVALID,
                     L"cache self-check: residual Template= line (must be zero)"};
         if (_wcsicmp(kv.key.c_str(), L"FileRootPath") == 0) {
             haveRoot = true;
             if (_wcsicmp(kv.value.c_str(), boxDir.c_str()) != 0)
-                return {SbieStatus::INVALID,
+                return {SbieStatus::CACHE_INVALID,
                         L"cache self-check: FileRootPath mismatch: " + kv.value};
         }
     }
     if (!haveRoot)
-        return {SbieStatus::INVALID, L"cache self-check: missing FileRootPath"};
+        return {SbieStatus::CACHE_INVALID, L"cache self-check: missing FileRootPath"};
     return {};
 }
 
@@ -84,13 +86,34 @@ bool CacheExists(const std::wstring& box)
 V2Err DeleteBoxCache(const std::wstring& box)
 {
     const std::wstring path = CachePathFor(box);
+    // 顺手清本盒的陈旧原子写残骸（docs/10 §6.2：>10min 的 *.tmp；新鲜的
+    // 可能是并发写者在途，不动。tmp 名 = <box>.ini.<pid>.<tick>.tmp，见
+    // WriteTextFileAtomic 的唯一化命名）
+    {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((path + L".*.tmp").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            FILETIME nowFt;
+            GetSystemTimeAsFileTime(&nowFt);
+            ULONGLONG now = ((ULONGLONG)nowFt.dwHighDateTime << 32)
+                            + nowFt.dwLowDateTime;
+            do {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                    continue;
+                ULONGLONG then = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32)
+                                 + fd.ftLastWriteTime.dwLowDateTime;
+                if (now > then
+                    && (now - then) > 10ull * 60 * 10000000ull /*10min*/)
+                    DeleteFileW((BoxesDir() + L"\\" + fd.cFileName).c_str());
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+    }
     if (!PathExists(path))
         return {};
     if (!DeleteFileW(path.c_str()))
         return {SbieStatus::GENERIC, L"cannot delete cache: " + path + L" ("
                     + std::to_wstring(GetLastError()) + L")"};
-    // 顺手清可能残留的 .tmp（崩溃自愈）
-    DeleteFileW((path + L".tmp").c_str());
     return {};
 }
 

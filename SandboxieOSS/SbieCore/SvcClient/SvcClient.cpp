@@ -9,18 +9,18 @@
 #include "SvcClient.h"
 #include "../Util/Ntdll.h"
 
-// vendor 协议头（msgids.h / sbieiniwire.h / ProcessWire.h / MountManagerWire.h；
+// vendor 协议头（msgids.h / sbieiniwire.h / ProcessWire.h；
 // defines_win32.h 提供 BOXNAME_COUNT/PORT_MESSAGE）
 #include "msgids.h"
 #include "sbieiniwire.h"
 #include "ProcessWire.h"
-#include "MountManagerWire.h"
 
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <mutex>
+#include <vector>
 
 namespace sbie::svc {
 
@@ -299,78 +299,6 @@ SbieStatus SvcClient::IniGetPath(std::wstring* path, bool* isHome)
     return SbieStatus::OK;
 }
 
-SbieStatus SvcClient::IniGetUser(bool* admin, std::wstring* section,
-                                 std::wstring* name)
-{
-    SBIE_INI_GET_USER_REQ req{};
-    req.h.msgid = MSGID_SBIE_INI_GET_USER;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallShort(this, &req, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    SBIE_INI_GET_USER_RPL* r = (SBIE_INI_GET_USER_RPL*)rpl;
-    if (r->h.status != 0) {
-        st = FromNtStatus((LONG)r->h.status);
-        free(rpl);
-        return st;
-    }
-    if (admin)
-        *admin = r->admin != FALSE;
-    if (section)
-        section->assign(r->section);
-    if (name && r->name_len > 0) {
-        // name_len 为 WCHAR 数；防越界
-        size_t avail = (rplLen >= sizeof(*r) + (size_t)r->name_len * sizeof(WCHAR))
-                     ? r->name_len
-                     : (rplLen > sizeof(*r) ? (rplLen - sizeof(*r)) / sizeof(WCHAR) : 0);
-        name->assign(r->name, avail);
-    }
-    free(rpl);
-    return SbieStatus::OK;
-}
-
-SbieStatus SvcClient::IniGetSetting(const std::wstring& section,
-                                    const std::wstring& setting,
-                                    std::wstring* value)
-{
-    if (section.size() > 64 || setting.size() > 64)
-        return SbieStatus::INVALID;
-    // 服务端 GetSetting 同样要求 h.length ≥ sizeof(SBIE_INI_SETTING_REQ)
-    // （sbieiniserver.cpp:984-986；M1 误按 offsetof(value) 组包 → 必被拒）。
-    // GET 不携带 value 数据，定长头即可。
-    SBIE_INI_SETTING_REQ req{};
-    const size_t reqLen = sizeof(req);
-    req.h.msgid = MSGID_SBIE_INI_GET_SETTING;
-    req.h.length = (ULONG)reqLen;
-    req.refresh = FALSE;
-    wcsncpy_s(req.section, section.c_str(), _TRUNCATE);
-    wcsncpy_s(req.setting, setting.c_str(), _TRUNCATE);
-    req.value_len = 0;
-
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = Call(&req, reqLen, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    SBIE_INI_SETTING_RPL* r = (SBIE_INI_SETTING_RPL*)rpl;
-    if (r->h.status != 0) {
-        st = FromNtStatus((LONG)r->h.status);
-        free(rpl);
-        return st;
-    }
-    // 服务端 value_len = 数据长 + 1（含结尾 NUL，GetSetting:1012）；多值以
-    // L'\n' 连接（CIniFile::GetValue）。剥结尾 NUL 后整体交付，由调用方拆分。
-    size_t avail = (rplLen >= sizeof(*r) + (size_t)r->value_len * sizeof(WCHAR))
-                 ? r->value_len
-                 : (rplLen > sizeof(*r) ? (rplLen - sizeof(*r)) / sizeof(WCHAR) : 0);
-    if (avail && r->value[avail - 1] == L'\0')
-        --avail;
-    value->assign(r->value, avail);
-    free(rpl);
-    return SbieStatus::OK;
-}
-
 // 长度约定（QSbieAPI SbieIniSet，SandboxiePlus\QSbieAPI\SbieAPI.cpp:1259-1288；
 // 与服务端 sbieiniserver.cpp CheckRequest :432-449 逐条对齐，坑记录 04 §8.10）：
 //   - value_len = wcslen(value)（不含 NUL）——服务端校验点 req->value[req->value_len]
@@ -447,25 +375,6 @@ SbieStatus SvcClient::SetPassword(const std::wstring& oldPw,
     return st;
 }
 
-SbieStatus SvcClient::TestPassword(const std::wstring& pw)
-{
-    if (pw.size() > 64)
-        return SbieStatus::INVALID;
-    SBIE_INI_PASSWORD_REQ req{};
-    req.h.msgid = MSGID_SBIE_INI_TEST_PASSWORD;
-    wcsncpy_s(req.old_password, pw.c_str(), 64);
-    req.new_password[0] = L'\0';
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallShort(this, &req, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    MSG_HEADER* r = (MSG_HEADER*)rpl;
-    st = r->status == 0 ? SbieStatus::OK : FromNtStatus((LONG)r->status);
-    free(rpl);
-    return st;
-}
-
 // ---------------------------------------------------------------------------
 // 便捷层：ProcessServer 系列（03 §4）
 // ---------------------------------------------------------------------------
@@ -503,80 +412,6 @@ SbieStatus SvcClient::KillAll(const std::wstring& box, ULONG sessionId)
     st = r->status == 0 ? SbieStatus::OK : FromNtStatus((LONG)r->status);
     free(rpl);
     return st;
-}
-
-SbieStatus SvcClient::SuspendResume(ULONG pid, bool suspend)
-{
-    PROCESS_SUSPEND_RESUME_ONE_REQ req{};
-    req.h.msgid = MSGID_PROCESS_SUSPEND_RESUME_ONE;
-    req.pid = pid;
-    req.suspend = suspend ? TRUE : FALSE;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallShort(this, &req, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    MSG_HEADER* r = (MSG_HEADER*)rpl;
-    st = r->status == 0 ? SbieStatus::OK : FromNtStatus((LONG)r->status);
-    free(rpl);
-    return st;
-}
-
-SbieStatus SvcClient::SuspendResumeAll(const std::wstring& box, bool suspend)
-{
-    if (box.size() >= BOXNAME_COUNT)
-        return SbieStatus::INVALID;
-    PROCESS_SUSPEND_RESUME_ALL_REQ req{};
-    req.h.msgid = MSGID_PROCESS_SUSPEND_RESUME_ALL;
-    req.session_id = (ULONG)-1;
-    wcsncpy_s(req.boxname, box.c_str(), _TRUNCATE);
-    req.suspend = suspend ? TRUE : FALSE;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallShort(this, &req, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    MSG_HEADER* r = (MSG_HEADER*)rpl;
-    st = r->status == 0 ? SbieStatus::OK : FromNtStatus((LONG)r->status);
-    free(rpl);
-    return st;
-}
-
-SbieStatus SvcClient::GetProcInfo(ULONG pid, unsigned infoClasses, ProcInfo* out)
-{
-    PROCESS_GET_INFO_REQ req{};
-    req.h.msgid = MSGID_PROCESS_GET_INFO;
-    req.dwProcessId = pid;
-    req.dwInfoClasses = infoClasses;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallShort(this, &req, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    PROCESS_INFO_RPL* r = (PROCESS_INFO_RPL*)rpl;
-    if (r->h.status != 0) {
-        st = FromNtStatus((LONG)r->h.status);
-        free(rpl);
-        return st;
-    }
-    out->parentId = r->dwParentId;
-    out->flags = r->dwInfo;
-    out->suspended = r->bSuspended != FALSE;
-    auto take = [&](ULONG ofs, ULONG lenChars) -> std::wstring {
-        if (ofs == 0 || lenChars == 0 || ofs >= rplLen)
-            return {};
-        size_t avail = (rplLen - ofs) / sizeof(WCHAR);
-        if (avail < lenChars)
-            lenChars = (ULONG)avail;
-        const WCHAR* s = (const WCHAR*)((const UCHAR*)r + ofs);
-        // ofs 相对结构体起点（03 §4），len 为 WCHAR 数
-        return std::wstring(s, wcsnlen(s, lenChars));
-    };
-    out->image = take(r->app_ofs, r->app_len);
-    out->cmdline = take(r->cmd_ofs, r->cmd_len);
-    out->workdir = take(r->dir_ofs, r->dir_len);
-    free(rpl);
-    return SbieStatus::OK;
 }
 
 SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
@@ -673,210 +508,6 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
 ULONG SvcClient::LastRunSandboxedWin32()
 {
     return s_lastRunWin32;
-}
-
-// ---------------------------------------------------------------------------
-// 便捷层：ImBox / MountManager 系列（波 D2，docs/04 §18）
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// MountManager 回复 status 是 win32 错误码（SHORT_REPLY(ERROR_*)；唯一例外是
-// 沙箱内调用者的 STATUS_ACCESS_DENIED 守卫）。区分高位：NTSTATUS 失败码恒
-// 0xC000xxxx，win32 错误远小于之。
-SbieStatus ImBoxStatusOf(ULONG status)
-{
-    if (status == 0)
-        return SbieStatus::OK;
-    if (status & 0x80000000ul)
-        return FromNtStatus((LONG)status);
-    switch (status) {
-    case ERROR_NOT_FOUND:            // 1168：根未挂载
-        return SbieStatus::NOT_FOUND;
-    case ERROR_DEVICE_NOT_AVAILABLE: // 4319：ImDisk 驱动缺席（SandboxieTools）
-        return SbieStatus::DRIVER_UNAVAILABLE;
-    case ERROR_PATH_NOT_FOUND:
-    case ERROR_FILE_NOT_FOUND:
-        return SbieStatus::NOT_FOUND;
-    case ERROR_ACCESS_DENIED:
-        return SbieStatus::ACCESS_DENIED;
-    case ERROR_INVALID_PARAMETER:
-        return SbieStatus::INVALID;
-    default:
-        return SbieStatus::GENERIC;  // ERROR_FUNCTION_FAILED 等
-    }
-}
-
-SbieStatus CallImBoxShort(const void* req, size_t reqLen, ULONG* statusOut,
-                          void** rplOut, size_t* rplLenOut)
-{
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SvcClient* c = &SvcClient::Instance();
-    SbieStatus st = c->Call(req, reqLen, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    // SHORT_REPLY 的回复只有 MSG_HEADER；LONG_REPLY 带载荷（调用方 free）
-    *statusOut = ((MSG_HEADER*)rpl)->status;
-    *rplOut = rpl;
-    *rplLenOut = rplLen;
-    return SbieStatus::OK;
-}
-
-} // namespace
-
-SbieStatus SvcClient::ImBoxCreate(const std::wstring& fileRootDos,
-                                  unsigned long long sizeKb,
-                                  const std::wstring& password)
-{
-    if (fileRootDos.empty() || password.size() > 128)
-        return SbieStatus::INVALID;
-    // 服务端校验 h.length ≥ sizeof(IMBOX_CREATE_REQ)；变长 file_root 尾随其后
-    const std::wstring fileRoot = L"\\??\\" + fileRootDos;
-    const size_t reqLen = sizeof(IMBOX_CREATE_REQ)
-                          + fileRoot.size() * sizeof(WCHAR);
-    IMBOX_CREATE_REQ* req = (IMBOX_CREATE_REQ*)calloc(1, reqLen);
-    if (!req)
-        return SbieStatus::GENERIC;
-    req->h.msgid = MSGID_IMBOX_CREATE;
-    req->h.length = (ULONG)reqLen;
-    req->image_size = sizeKb;
-    wcsncpy_s(req->password, password.c_str(), _TRUNCATE);
-    // file_root 声明为 [1]：变长尾区，memcpy 越过定长界（calloc 覆盖整个 reqLen）
-    memcpy(req->file_root, fileRoot.c_str(),
-           (fileRoot.size() + 1) * sizeof(WCHAR));
-
-    ULONG status = 0;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallImBoxShort(req, reqLen, &status, &rpl, &rplLen);
-    free(req);
-    if (!Ok(st))
-        return st;
-    free(rpl);
-    return ImBoxStatusOf(status);
-}
-
-SbieStatus SvcClient::ImBoxMount(const std::wstring& regRootNt,
-                                 const std::wstring& fileRootDos,
-                                 const std::wstring& password,
-                                 bool protectRoot, bool adminOnly,
-                                 bool autoUnmount)
-{
-    if (fileRootDos.empty() || regRootNt.size() >= MAX_REG_ROOT_LEN
-        || password.size() > 128)
-        return SbieStatus::INVALID;
-    const std::wstring fileRoot = L"\\??\\" + fileRootDos;
-    const size_t reqLen = sizeof(IMBOX_MOUNT_REQ)
-                          + fileRoot.size() * sizeof(WCHAR);
-    IMBOX_MOUNT_REQ* req = (IMBOX_MOUNT_REQ*)calloc(1, reqLen);
-    if (!req)
-        return SbieStatus::GENERIC;
-    req->h.msgid = MSGID_IMBOX_MOUNT;
-    req->h.length = (ULONG)reqLen;
-    wcsncpy_s(req->password, password.c_str(), _TRUNCATE);
-    req->protect_root = protectRoot ? TRUE : FALSE;
-    req->admin_only = adminOnly ? TRUE : FALSE;
-    req->auto_unmount = autoUnmount ? TRUE : FALSE;
-    wcscpy_s(req->reg_root, regRootNt.c_str());
-    // file_root 声明为 [1]：变长尾区，memcpy 越过定长界（calloc 覆盖整个 reqLen）
-    memcpy(req->file_root, fileRoot.c_str(),
-           (fileRoot.size() + 1) * sizeof(WCHAR));
-
-    ULONG status = 0;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallImBoxShort(req, reqLen, &status, &rpl, &rplLen);
-    free(req);
-    if (!Ok(st))
-        return st;
-    free(rpl);
-    return ImBoxStatusOf(status);
-}
-
-SbieStatus SvcClient::ImBoxUnmount(const std::wstring& regRootNt)
-{
-    if (regRootNt.empty() || regRootNt.size() >= MAX_REG_ROOT_LEN)
-        return SbieStatus::INVALID;
-    IMBOX_UNMOUNT_REQ req{};
-    req.h.msgid = MSGID_IMBOX_UNMOUNT;
-    req.h.length = sizeof(req);
-    wcscpy_s(req.reg_root, regRootNt.c_str());
-
-    ULONG status = 0;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    free(rpl);
-    return ImBoxStatusOf(status);
-}
-
-SbieStatus SvcClient::ImBoxEnum(std::vector<std::wstring>* regRoots)
-{
-    regRoots->clear();
-    IMBOX_ENUM_REQ req{};
-    req.h.msgid = MSGID_IMBOX_ENUM;
-    req.h.length = sizeof(req);
-
-    ULONG status = 0;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    if (status != 0) {
-        free(rpl);
-        return ImBoxStatusOf(status);
-    }
-    // rpl 为 LONG_REPLY：reg_roots = 多串（逐项 NUL 结尾，末尾额外 NUL）
-    IMBOX_ENUM_RPL* r = (IMBOX_ENUM_RPL*)rpl;
-    const WCHAR* p = r->reg_roots;
-    const WCHAR* end = (const WCHAR*)((const UCHAR*)rpl + rplLen);
-    while (p < end && *p) {
-        const WCHAR* itemEnd = p;
-        while (itemEnd < end && *itemEnd)
-            ++itemEnd;
-        regRoots->emplace_back(p, itemEnd - p);
-        p = itemEnd + 1;
-    }
-    free(rpl);
-    return SbieStatus::OK;
-}
-
-SbieStatus SvcClient::ImBoxQuery(const std::wstring& regRootNt,
-                                 ImDiskMount* out)
-{
-    if (regRootNt.size() >= MAX_REG_ROOT_LEN)
-        return SbieStatus::INVALID;
-    IMBOX_QUERY_REQ req{};
-    req.h.msgid = MSGID_IMBOX_QUERY;
-    req.h.length = sizeof(req);
-    wcscpy_s(req.reg_root, regRootNt.c_str());
-
-    ULONG status = 0;
-    void* rpl = nullptr;
-    size_t rplLen = 0;
-    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
-    if (!Ok(st))
-        return st;
-    if (status != 0) {
-        free(rpl);
-        return ImBoxStatusOf(status);
-    }
-    IMBOX_QUERY_RPL* r = (IMBOX_QUERY_RPL*)rpl;
-    out->diskSize = r->disk_size;
-    out->usedSize = r->used_size;
-    // disk_root：NUL 结尾，落在 (rplLen - offsetof(disk_root)) 界内
-    const WCHAR* dr = r->disk_root;
-    size_t avail = 0;
-    if (rplLen > offsetof(IMBOX_QUERY_RPL, disk_root))
-        avail = (rplLen - offsetof(IMBOX_QUERY_RPL, disk_root)) / sizeof(WCHAR);
-    out->diskRoot.assign(dr, avail ? wcsnlen(dr, avail) : 0);
-    out->mounted = true;
-    free(rpl);
-    return SbieStatus::OK;
 }
 
 } // namespace sbie::svc

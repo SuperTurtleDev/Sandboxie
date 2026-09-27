@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Sandboxie-OSS contributors
 //
-// V2 五命令实现（docs/10-v2-design.md §7/§9）。
+// V2 命令面实现（docs/10-v2-design.md §7/§9；命令面经附录 2/4 扩至
+// exec/register/unregister/sync-config/ps/kill-box/kill/log/info）。
 //
 // exec 状态机（§7.2/§7.3 全状态迁移）：
 //   L=running.lock R=注册可见 P=盒进程数>0
@@ -245,18 +246,18 @@ int CmdExec(const CommandContext& ctx)
                 L"started pid " + std::to_wstring(rr.pid) + L" in box "
                 + self.box + L" (from inside)"));
         }
-        if (rr.hProcess)
-            CloseHandle(rr.hProcess);
-        if (!waitChild)
+        if (!waitChild) {
+            if (rr.hProcess)
+                CloseHandle(rr.hProcess);
             return 0;   // R1：spawn 成功即退（rc=0）
+        }
+        // --wait：等已持有的句柄（按 pid 重开有 TOCTOU——子进程先亡则句柄
+        // 取不到、真实退出码丢失，恒回 0）
         DWORD code = 0;
-        // --wait：句柄已在上方关闭，按 pid 重开等待并透传
-        HANDLE hProc = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                                   FALSE, rr.pid);
-        if (hProc) {
-            WaitForSingleObject(hProc, INFINITE);
-            GetExitCodeProcess(hProc, &code);
-            CloseHandle(hProc);
+        if (rr.hProcess) {
+            WaitForSingleObject(rr.hProcess, INFINITE);
+            GetExitCodeProcess(rr.hProcess, &code);
+            CloseHandle(rr.hProcess);
         }
         return (int)code;
     }
@@ -268,7 +269,6 @@ int CmdExec(const CommandContext& ctx)
     const std::wstring cmdline = rest.empty() ? L"cmd.exe" : BuildCommandLine(rest);
 
     // ---- 状态机（§7.3）----
-    bool started = false;
     bool s6Healed = false;      // S6 幽灵节 heal（单次 ReloadConf）已做？
     bool deathHealed = false;   // 濒死窗口自愈（单次确保 monitor）已做？
     DWORD waited = 0;
@@ -300,32 +300,15 @@ int CmdExec(const CommandContext& ctx)
                 // S3/S4 判定：盒内有活进程 = 真"运行中直接启动"（S4）；无
                 // 进程 = 上一代刚结束、monitor teardown 尚未摘锁的濒死窗口
                 // ——此时直接 spawn 会落进低级注入结算期静默夭折（实测子进
-                // 程退出码 4）。濒死判据：排除盒自举服务（SandboxieRpcSs/
-                // DcomLaunch——用户进程全灭后仍存活数秒）后计数为 0。改为
-                // 循环重探：或用户进程复起（并发 exec 抢先，走 S4）或锁被
-                // teardown 摘除（回 S0，由墓碑机制确定性退避）。
-                bool anyUser = false;
-                {
-                    std::vector<ULONG> pids;
-                    if (drv::EnumBoxProcesses(t.box, true, &pids)
-                        == SbieStatus::OK) {
-                        for (ULONG pid : pids) {
-                            drv::ProcQuery pq;
-                            if (drv::QueryProcessById(pid, &pq) != SbieStatus::OK)
-                                continue;   // 瞬态：保守视为活
-                            if (_wcsicmp(pq.image.c_str(), L"SandboxieRpcSs.exe") == 0
-                                || _wcsicmp(pq.image.c_str(),
-                                            L"SandboxieDcomLaunch.exe") == 0)
-                                continue;   // 盒自举服务：不阻直启判定
-                            anyUser = true;
-                            break;
-                        }
-                    } else {
-                        anyUser = true;   // 枚举失败：保守直启（原行为）
-                    }
-                }
+                // 程退出码 4）。濒死判据与 monitor 归零判定同源（B1 单一判据
+                // = BoxUserProcessCount：排除五个自举服务镜像，查询瞬态与
+                // 枚举失败均保守视为"有用户进程"）。改为循环重探：或用户
+                // 进程复起（并发 exec 抢先，走 S4）或锁被 teardown 摘除
+                // （回 S0）。
+                V2Err uce;
+                size_t user = BoxUserProcessCount(t.box, &uce);
+                bool anyUser = !uce.Ok() || user > 0;
                 if (anyUser) {
-                    started = true;
                     break;
                 }
                 // 濒死窗口：等待重探（teardown 通常 ~1s 内摘锁）。自愈：
@@ -355,7 +338,6 @@ int CmdExec(const CommandContext& ctx)
                     V2Err re = RegisterBoxWithAuth(t.box, t.boxDir, opts);
                     if (!re.Ok())
                         return Fail(opts, re);
-                    started = true;
                     break;
                 }
                 // S6：无锁有注册无缓存。两种可能：(a) monitor/手动 unregister
@@ -393,7 +375,6 @@ int CmdExec(const CommandContext& ctx)
                         DeleteLock(t.boxDir);   // 不留半注册
                         return Fail(opts, re);
                     }
-                    started = true;
                     break;
                 }
             }
@@ -405,7 +386,6 @@ int CmdExec(const CommandContext& ctx)
         Sleep(200);
         waited += 200;
     }
-    (void)started;
 
     // ---- 预热：任务文件 + 公共 monitor（先于 spawn）----
     // 竞态修复（实测）：盒内进程启动要求本会话存在活的 session leader
@@ -447,64 +427,60 @@ int CmdExec(const CommandContext& ctx)
     // 子进程已死且盒内无用户进程 = 落入上一代注销的注入结算窗口（实测
     // 2-6s 静默夭折，退出码 4/127）→ 结算 4s 后重 spawn 一次。首启/健康
     // 路径仅多 300ms 探活，不阻塞返回语义。
-    {
+    if (rr.hProcess
+        && WaitForSingleObject(rr.hProcess, 300) == WAIT_OBJECT_0) {
         DWORD early = 0;
-        if (rr.hProcess
-            && WaitForSingleObject(rr.hProcess, 300) == WAIT_OBJECT_0) {
-            GetExitCodeProcess(rr.hProcess, &early);
-            V2Err ce;
-            size_t user = BoxUserProcessCount(t.box, &ce);
-            if ((early == 4 || early == 127) && ce.Ok() && user == 0) {
-                Diag(L"early child death (code "
-                     + std::to_wstring(early)
-                     + L") - injection settle window; respawning once");
-                Sleep(4000);
-                svc::RunResult rr2;
-                SbieStatus rs2 = svc::SvcClient::Instance().RunSandboxed(
-                    t.box, cmdline, L"", 0, &rr2);
-                if (rs2 == SbieStatus::OK) {
+        GetExitCodeProcess(rr.hProcess, &early);
+        CloseHandle(rr.hProcess);
+        rr.hProcess = nullptr;
+        V2Err ce;
+        size_t user = BoxUserProcessCount(t.box, &ce);
+        if ((early == 4 || early == 127) && ce.Ok() && user == 0) {
+            Diag(L"early child death (code "
+                 + std::to_wstring(early)
+                 + L") - injection settle window; respawning once");
+            Sleep(4000);
+            svc::RunResult rr2;
+            SbieStatus rs2 = svc::SvcClient::Instance().RunSandboxed(
+                t.box, cmdline, L"", 0, &rr2);
+            if (rs2 == SbieStatus::OK) {
+                if (opts.json) {
+                    json::JsonValue data = json::JsonValue::Object();
+                    data.set(L"box", json::JsonValue(t.box));
+                    data.set(L"pid", json::JsonValue((long long)rr2.pid));
+                    data.set(L"respawned", json::JsonValue(true));
+                    EmitJsonOk(opts, data);
+                } else if (!opts.quiet) {
+                    util::PrintLineUtf8(util::WideToUtf8(
+                        L"respawned pid " + std::to_wstring(rr2.pid)
+                        + L" in box " + t.box));
+                }
+                if (!waitChild) {
                     if (rr2.hProcess)
                         CloseHandle(rr2.hProcess);
-                    if (opts.json) {
-                        json::JsonValue data = json::JsonValue::Object();
-                        data.set(L"box", json::JsonValue(t.box));
-                        data.set(L"pid", json::JsonValue((long long)rr2.pid));
-                        data.set(L"respawned", json::JsonValue(true));
-                        EmitJsonOk(opts, data);
-                    } else if (!opts.quiet) {
-                        util::PrintLineUtf8(util::WideToUtf8(
-                            L"respawned pid " + std::to_wstring(rr2.pid)
-                            + L" in box " + t.box));
-                    }
-                    if (!waitChild)
-                        return 0;
-                    DWORD code2 = 0;
-                    HANDLE h2 = OpenProcess(
-                        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                        FALSE, rr2.pid);
-                    if (h2) {
-                        WaitForSingleObject(h2, INFINITE);
-                        GetExitCodeProcess(h2, &code2);
-                        CloseHandle(h2);
-                    }
-                    return (int)code2;
+                    return 0;
                 }
+                // --wait：等已持有句柄（pid 重开有 TOCTOU，见上方同款注释）
+                DWORD code2 = 0;
+                if (rr2.hProcess) {
+                    WaitForSingleObject(rr2.hProcess, INFINITE);
+                    GetExitCodeProcess(rr2.hProcess, &code2);
+                    CloseHandle(rr2.hProcess);
+                }
+                return (int)code2;
             }
         }
     }
-    if (rr.hProcess)
-        CloseHandle(rr.hProcess);
-    if (!waitChild)
+    if (!waitChild) {
+        if (rr.hProcess)
+            CloseHandle(rr.hProcess);
         return 0;   // R1：spawn 成功即退（rc=0）
+    }
     DWORD code = 0;
-    {
-        HANDLE hProc = OpenProcess(
-            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, rr.pid);
-        if (hProc) {
-            WaitForSingleObject(hProc, INFINITE);
-            GetExitCodeProcess(hProc, &code);
-            CloseHandle(hProc);
-        }
+    if (rr.hProcess) {
+        WaitForSingleObject(rr.hProcess, INFINITE);
+        GetExitCodeProcess(rr.hProcess, &code);
+        CloseHandle(rr.hProcess);
     }
     return (int)code;
 }
@@ -565,20 +541,14 @@ int CmdUnregister(const CommandContext& ctx)
         return EmitError(opts, SbieStatus::DRIVER_UNAVAILABLE, L"SbieDll.dll not available");
 
     // §6.2 顺序：任务 → 盒忙检查 → 锁 → 缓存+reload → alias
+    // （无 <box>.dead 墓碑：R1 起结算窗口改由 exec 的 spawn 后 300ms 探活
+    // 反应式自愈处理，无任何读取方）
     DeleteTask(t.box);
     V2Err e = UnregisterBox(t.box, true /*busyCheck*/);
     if (!e.Ok())
         return Fail(opts, e);
     DeleteLock(t.boxDir);
     AliasRemoveForBox(t.box);
-    // 墓碑：供下一个 exec 的 S0 路径做结算退避（与 monitor teardown 同款）
-    {
-        HANDLE h = CreateFileW((MonitorsDir() + L"\\" + t.box + L".dead").c_str(),
-                               GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE)
-            CloseHandle(h);
-    }
 
     EmitMessage(opts, L"unregistered box '" + t.box + L"'");
     return 0;

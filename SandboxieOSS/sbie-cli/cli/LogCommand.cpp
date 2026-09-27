@@ -72,24 +72,20 @@ struct LogEntry {
     std::vector<std::wstring> strings;
 };
 
-// N2（docs/11 复测 major）：条目超缓冲（长 cmdline）时驱动返回
-// STATUS_BUFFER_TOO_SMALL 且不推进 *msg_num——条目本身已被环迭代越过，
-// 同 seq 重试将永远命中同一条 => follower 投递死点。对策：
-//   1) 缓冲扩至 64KB（堆，覆盖全部现实条目）；
-//   2) 连续 3 次 TOO_SMALL 仍不前进时，seq+1 强制解卡（丢弃该条，计数
-//      呈现在输出诊断）。
-// N2 真身（终段）：SbieApi_GetMessage 的 DLL 包装把 Length 截断为
-// USHORT（sbieapi.c:312 msgtext.MaximumLength = (USHORT)Length）——
-// 65536 字节截断为 0 ⇒ 一切条目皆 BUFFER_TOO_SMALL ⇒ 永无投递。
-// 缓冲字节数必须 < 65536：32760 WCHAR = 65520 B（保留对齐余量）。
+// N2（docs/11 复测 major，两层真身）：
+//   1) SbieApi_GetMessage 的 DLL 包装把缓冲字节长截为 USHORT
+//      （sbieapi.c:312 msgtext.MaximumLength = (USHORT)Length）——传
+//      65536 截断为 0 ⇒ 一切条目皆 BUFFER_TOO_SMALL ⇒ 永无投递。故缓冲
+//      取 32760 WCHAR = 65520 B（< 65536，保留对齐余量）。
+//   2) 环内存在超缓冲巨型条目（>64KB 单串）：驱动对其返回 TOO_SMALL 但
+//      仍推进游标（api.c:807 无条件写）——TooSmall 须立即重试跳过，
+//      不能当"空"睡眠（旧实现每条 150ms 爬行）。
 constexpr ULONG kLogBufWChars = 32760;
 constexpr ULONG kStatusBufferTooSmall = 0xC0000023;
 ULONG g_lastFetchRc = 0;   // forensic（V2LOGDBG）
 
-// 取一条的三态结果：N2 实测定位——环内存在超缓冲巨型条目（>32KB 单串），
-// 驱动对其返回 BUFFER_TOO_SMALL 但仍推进 *msg_num（api.c:807 无条件写）：
-// 巨型条会被"每次一跳 150ms"地爬行吞掉时间且不产出任何可见行（follower
-// 投递死点的真身）。TooSmall 必须被上层立即重试（不睡眠）以快速跳过。
+// 取一条的三态结果：Delivered/Empty/TooSmall（同上注释第 2 点——巨型条
+// 游标已推进，重试即跳过）。
 enum class FetchResult { Delivered, Empty, TooSmall };
 
 FetchResult FetchOne(ULONG* seq, LogEntry* e)
@@ -279,8 +275,8 @@ int CmdLog(const CommandContext& ctx)
     // 即跳），再进入跟随循环（dmesg -w 的 tail 语义）。
     if (f.follow) {
         {
-            // 有界快进（≤750ms）：背景流量持续（实测 ~8 条/s）时无 Empty
-            // 可等，无限快进 = 永不进入跟随循环（N2 第三段真身）
+            // 有界快进（≤5s，docs/10 附录 5）：背景流量持续（实测 ~8 条/s）
+            // 时无 Empty 可等，无限快进 = 永不进入跟随循环（N2 第三段真身）
             ULONGLONG ffUntil = GetTickCount64() + 5000;
             LogEntry e;
             while (GetTickCount64() < ffUntil) {

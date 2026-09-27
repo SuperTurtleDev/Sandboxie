@@ -147,7 +147,6 @@ int Run(const std::vector<std::wstring>& argv)
         return 2;
     }
 
-    // 沙箱内自检（02 §6：CLI 不得在沙箱内运行）
     // 沙箱内自检（02 §6）：仅 exec 允许盒内运行（CmdExec 的"自身盒"快速
     // 路径——盒内 `exec ./ cmd.exe` 向同盒追加进程）；其余命令拒绝。
     if (drv::LoadSbieDll(opts.sbieDllPath) && drv::InSandbox()
