@@ -14,10 +14,13 @@
 #include "msgids.h"
 #include "sbieiniwire.h"
 #include "ProcessWire.h"
+#include "MountManagerWire.h"
 
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 #include <mutex>
 #include <vector>
@@ -482,7 +485,7 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
     req->si_flags = STARTF_FORCEOFFFEEDBACK;
     req->si_show_window = 1; // SW_SHOWNORMAL
     req->creation_flags = creationFlags;
-
+    
     void* rpl = nullptr;
     size_t rplLen = 0;
     SbieStatus st = Call(req, reqLen, &rpl, &rplLen);
@@ -508,6 +511,211 @@ SbieStatus SvcClient::RunSandboxed(const std::wstring& box,
 ULONG SvcClient::LastRunSandboxedWin32()
 {
     return s_lastRunWin32;
+}
+
+// ---------------------------------------------------------------------------
+// ImBox / MountManager（加密盒容器；实现自 845f92c 恢复——评审 pass 曾误作
+// 死代码清除，create-encbox 波次按用户指令 git 找回；契约见 SvcClient.h）
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// MountManager 回复 status 是 win32 错误码（唯一例外：沙箱内调用者的
+// STATUS_ACCESS_DENIED 守卫）。区分高位：NTSTATUS 失败码恒 0xC000xxxx，
+// win32 错误远小于之。
+SbieStatus ImBoxStatusOf(ULONG status)
+{
+    if (status == 0)
+        return SbieStatus::OK;
+    if (status & 0x80000000ul)
+        return FromNtStatus((LONG)status);
+    switch (status) {
+    case ERROR_NOT_FOUND:            // 1168：根未挂载
+        return SbieStatus::NOT_FOUND;
+    case ERROR_DEVICE_NOT_AVAILABLE: // 4319：ImDisk 驱动缺席（SandboxieTools）
+        return SbieStatus::DRIVER_UNAVAILABLE;
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_FILE_NOT_FOUND:
+        return SbieStatus::NOT_FOUND;
+    case ERROR_ACCESS_DENIED:
+        return SbieStatus::ACCESS_DENIED;
+    case ERROR_INVALID_PARAMETER:
+        return SbieStatus::INVALID;
+    default:
+        return SbieStatus::GENERIC;  // ERROR_FUNCTION_FAILED 等
+    }
+}
+
+SbieStatus CallImBoxShort(const void* req, size_t reqLen, ULONG* statusOut,
+                          void** rplOut, size_t* rplLenOut)
+{
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SvcClient* c = &SvcClient::Instance();
+    SbieStatus st = c->Call(req, reqLen, &rpl, &rplLen);
+    if (!Ok(st))
+        return st;
+    // SHORT_REPLY 的回复只有 MSG_HEADER；LONG_REPLY 带载荷（调用方 free）
+    *statusOut = ((MSG_HEADER*)rpl)->status;
+    *rplOut = rpl;
+    *rplLenOut = rplLen;
+    return SbieStatus::OK;
+}
+
+} // namespace
+
+SbieStatus SvcClient::ImBoxCreate(const std::wstring& fileRootDos,
+                                  unsigned long long sizeKb,
+                                  const std::wstring& password)
+{
+    if (fileRootDos.empty() || password.size() > 128)
+        return SbieStatus::INVALID;
+    // 服务端校验 h.length >= sizeof(IMBOX_CREATE_REQ)；变长 file_root 尾随
+    const std::wstring fileRoot = L"\\??\\" + fileRootDos;
+    const size_t reqLen = sizeof(IMBOX_CREATE_REQ)
+                          + fileRoot.size() * sizeof(WCHAR);
+    IMBOX_CREATE_REQ* req = (IMBOX_CREATE_REQ*)calloc(1, reqLen);
+    if (!req)
+        return SbieStatus::GENERIC;
+    req->h.msgid = MSGID_IMBOX_CREATE;
+    req->h.length = (ULONG)reqLen;
+    req->image_size = sizeKb;   // wire 字段单位 KB（MountManager.cpp:852 *1024）
+    wcsncpy_s(req->password, password.c_str(), _TRUNCATE);
+    // file_root 声明为 [1]：变长尾区，memcpy 越过定长界（calloc 覆盖 reqLen）
+    memcpy(req->file_root, fileRoot.c_str(),
+           (fileRoot.size() + 1) * sizeof(WCHAR));
+
+    ULONG status = 0;
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SbieStatus st = CallImBoxShort(req, reqLen, &status, &rpl, &rplLen);
+    free(req);
+    if (!Ok(st))
+        return st;
+        free(rpl);
+    return ImBoxStatusOf(status);
+}
+
+SbieStatus SvcClient::ImBoxMount(const std::wstring& regRootNt,
+                                 const std::wstring& fileRootDos,
+                                 const std::wstring& password,
+                                 bool protectRoot, bool adminOnly,
+                                 bool autoUnmount)
+{
+    if (fileRootDos.empty() || regRootNt.size() >= MAX_REG_ROOT_LEN
+        || password.size() > 128)
+        return SbieStatus::INVALID;
+    const std::wstring fileRoot = L"\\??\\" + fileRootDos;
+    const size_t reqLen = sizeof(IMBOX_MOUNT_REQ)
+                          + fileRoot.size() * sizeof(WCHAR);
+    IMBOX_MOUNT_REQ* req = (IMBOX_MOUNT_REQ*)calloc(1, reqLen);
+    if (!req)
+        return SbieStatus::GENERIC;
+    req->h.msgid = MSGID_IMBOX_MOUNT;
+    req->h.length = (ULONG)reqLen;
+    wcsncpy_s(req->password, password.c_str(), _TRUNCATE);
+    req->protect_root = protectRoot ? TRUE : FALSE;
+    req->admin_only = adminOnly ? TRUE : FALSE;
+    req->auto_unmount = autoUnmount ? TRUE : FALSE;
+    wcscpy_s(req->reg_root, regRootNt.c_str());
+    memcpy(req->file_root, fileRoot.c_str(),
+           (fileRoot.size() + 1) * sizeof(WCHAR));
+
+    ULONG status = 0;
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SbieStatus st = CallImBoxShort(req, reqLen, &status, &rpl, &rplLen);
+    free(req);
+    if (!Ok(st))
+        return st;
+    free(rpl);
+    return ImBoxStatusOf(status);
+}
+
+SbieStatus SvcClient::ImBoxUnmount(const std::wstring& regRootNt)
+{
+    if (regRootNt.empty() || regRootNt.size() >= MAX_REG_ROOT_LEN)
+        return SbieStatus::INVALID;
+    IMBOX_UNMOUNT_REQ req{};
+    req.h.msgid = MSGID_IMBOX_UNMOUNT;
+    req.h.length = sizeof(req);
+    wcscpy_s(req.reg_root, regRootNt.c_str());
+
+    ULONG status = 0;
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
+    if (!Ok(st))
+        return st;
+    free(rpl);
+    return ImBoxStatusOf(status);
+}
+
+SbieStatus SvcClient::ImBoxEnum(std::vector<std::wstring>* regRoots)
+{
+    IMBOX_ENUM_REQ req{};
+    req.h.msgid = MSGID_IMBOX_ENUM;
+    req.h.length = sizeof(req);
+    ULONG status = 0;
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
+    if (!Ok(st))
+        return st;
+    if (status != 0) {
+        free(rpl);
+        return ImBoxStatusOf(status);
+    }
+    regRoots->clear();
+    IMBOX_ENUM_RPL* r = (IMBOX_ENUM_RPL*)rpl;
+    const WCHAR* p = r->reg_roots;
+    size_t avail = rplLen > offsetof(IMBOX_ENUM_RPL, reg_roots)
+                       ? (rplLen - offsetof(IMBOX_ENUM_RPL, reg_roots))
+                             / sizeof(WCHAR)
+                       : 0;
+    const WCHAR* end = p + avail;
+    while (p < end && *p) {
+        const WCHAR* q = p;
+        while (q < end && *q)
+            ++q;
+        regRoots->emplace_back(p, q - p);
+        p = q + 1;
+    }
+    free(rpl);
+    return SbieStatus::OK;
+}
+
+SbieStatus SvcClient::ImBoxQuery(const std::wstring& regRootNt, ImDiskMount* out)
+{
+    if (regRootNt.size() >= MAX_REG_ROOT_LEN)
+        return SbieStatus::INVALID;
+    IMBOX_QUERY_REQ req{};
+    req.h.msgid = MSGID_IMBOX_QUERY;
+    req.h.length = sizeof(req);
+    wcscpy_s(req.reg_root, regRootNt.c_str());
+
+    ULONG status = 0;
+    void* rpl = nullptr;
+    size_t rplLen = 0;
+    SbieStatus st = CallImBoxShort(&req, sizeof(req), &status, &rpl, &rplLen);
+    if (!Ok(st))
+        return st;
+    if (status != 0) {
+        free(rpl);
+        return ImBoxStatusOf(status);
+    }
+    IMBOX_QUERY_RPL* r = (IMBOX_QUERY_RPL*)rpl;
+    out->diskSize = r->disk_size;
+    out->usedSize = r->used_size;
+    const WCHAR* dr = r->disk_root;
+    size_t avail = rplLen > offsetof(IMBOX_QUERY_RPL, disk_root)
+                       ? (rplLen - offsetof(IMBOX_QUERY_RPL, disk_root))
+                             / sizeof(WCHAR)
+                       : 0;
+    out->diskRoot.assign(dr, avail ? wcsnlen(dr, avail) : 0);
+    out->mounted = true;
+    free(rpl);
+    return SbieStatus::OK;
 }
 
 } // namespace sbie::svc

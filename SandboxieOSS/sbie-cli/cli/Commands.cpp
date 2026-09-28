@@ -26,6 +26,8 @@ void RegisterCommands()
     reg["kill"][""] = CmdKill;
     reg["log"][""] = CmdLog;
     reg["info"][""] = CmdInfo;
+    reg["create-box"][""] = CmdCreateBox;
+    reg["create-encbox"][""] = CmdCreateEncBox;
 }
 
 } // namespace sbie::cli

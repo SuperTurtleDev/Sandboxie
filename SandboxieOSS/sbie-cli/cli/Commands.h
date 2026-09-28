@@ -23,6 +23,8 @@ int CmdKillBox(const CommandContext& ctx);
 int CmdKill(const CommandContext& ctx);
 int CmdLog(const CommandContext& ctx);
 int CmdInfo(const CommandContext& ctx);
+int CmdCreateBox(const CommandContext& ctx);
+int CmdCreateEncBox(const CommandContext& ctx);
 
 // 内部工具：--migrate-templates <Templates.ini> <outDir>（TemplateMigrate.cpp）
 int CmdMigrateTemplates(const std::wstring& src, const std::wstring& outDir);

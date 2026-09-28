@@ -6,6 +6,7 @@
 
 #include "V2Registry.h"
 #include "V2Cache.h"
+#include "V2EncBox.h"
 #include "../../DriverApi/DriverApi.h"
 #include "../../SvcClient/SvcClient.h"
 #include "../../Util/Json.h"
@@ -132,6 +133,15 @@ V2Err ProbeRegistration(const std::wstring& box, RegState* state)
     *state = (v[0] == L'y' || v[0] == L'Y') ? RegState::Registered
                                             : RegState::RegisteredDisabled;
     return {};
+}
+
+bool CacheBelongsToOtherBox(const std::wstring& box, const std::wstring& boxDir,
+                            std::wstring* ownerOut)
+{
+    if (!CacheBelongsToOtherDir(box, boxDir, ownerOut))
+        return false;
+    // 声明根可能是加密盒的 <dir>\data——第二次比对豁免
+    return CacheBelongsToOtherDir(box, EncBoxFileRoot(boxDir), ownerOut);
 }
 
 bool CacheBelongsToOtherDir(const std::wstring& box, const std::wstring& boxDir,
@@ -286,7 +296,7 @@ V2Err RegisterBox(const std::wstring& box, const std::wstring& boxDir,
     // 已删除缓存留下的"幽灵节"（用户实测现场），会误报碰撞。
     {
         std::wstring owner;
-        if (CacheBelongsToOtherDir(box, boxDir, &owner))
+        if (CacheBelongsToOtherBox(box, boxDir, &owner))
             return {SbieStatus::INVALID,
                     L"box name '" + box + L"' already used by another directory ("
                         + owner
@@ -294,7 +304,23 @@ V2Err RegisterBox(const std::wstring& box, const std::wstring& boxDir,
                           L" first"};
     }
 
-    V2Err e = WriteBoxCache(box, boxDir, ini, ex.kv, ex.applied);
+    // 声明根：sandbox.ini 显式 FileRootPath 优先（加密盒=<dir>\data；
+    // 任意盒可声明子目录根）；缺省 = boxDir
+    std::wstring expectedRoot = boxDir;
+    {
+        IniFileData sini;
+        if (ParseIniFile(ini, &sini).Ok()) {
+            const IniSectionData* sec = sini.Find(box);
+            if (!sec)
+                sec = sini.Find(L"");
+            if (sec)
+                for (const auto& kv : sec->entries)
+                    if (_wcsicmp(kv.key.c_str(), L"FileRootPath") == 0
+                        && !kv.value.empty())
+                        expectedRoot = kv.value;
+        }
+    }
+    V2Err e = WriteBoxCache(box, boxDir, ini, ex.kv, ex.applied, expectedRoot);
     if (!e.Ok())
         return e;   // 缓存写/自检失败（docs/10 §9.2 码 12 = CACHE_INVALID）
 

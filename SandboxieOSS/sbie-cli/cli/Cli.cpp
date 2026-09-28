@@ -164,6 +164,7 @@ int Run(const std::vector<std::wstring>& argv)
     static const wchar_t* kV2Commands[] = {
         L"exec", L"register", L"unregister", L"sync-config", L"ps",
         L"kill-box", L"kill", L"log", L"info",
+        L"create-box", L"create-encbox",
     };
     for (const wchar_t* c : kV2Commands) {
         if (cmd == c) {

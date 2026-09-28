@@ -129,7 +129,54 @@
 >   疑 get_next 游标语义在"等待中新增"场景的内核侧行为，冻结驱动无法
 >   追踪。dump 路径（B4 验收面）完全正常。-w 复测 0/5，交测试 agent
 >   以本节取证复核；如确认仍死，建议后续用 SbieSvc 会话（session_id=-1
->   通道）做日志中继的替代方案。
+>   通道）做日志中继的替代方案。>
+> **附录 6（2026-09-28 加密盒 + Basic.ini 分离 + BoxTypes 六型）**：
+> - **create-encbox / UseFileImage=y**：布局 = sandbox.ini(明文) +
+>   data(盒根 junction 目标) + data.box(容器)。关键决策——服务端镜像名约定
+>   file_root+".box"（MountManager.cpp GetImageFileName），故取
+>   FileRootPath=<dir>\data 使容器恰为 <dir>\data.box（满足用户布局）。
+>   创建 = IMBOX_CREATE（SbieSvc 挂起 ImBox.exe 建卷+格式化+卸载，
+>   wire image_size 单位 KB）；exec 前置 IMBOX_MOUNT(regRoot=KeyRootPath,
+>   autoUnmount=true)——冻结链路 DriverAssistInject AcquireBoxRoot 只复用
+>   已有挂载（其自动挂载不带密码：BoxPassword 查询在 5.73.5 注释掉，
+>   MountManager.cpp:1147）；盒终止 DriverAssist:841 AutoUnmount 自动摘
+>   除，monitor teardown 幂例 unmount 兜底。密码链（用户拍板统一）：
+>   --mount-password(exec)/--password(create-encbox) > SBIE_BOX_PASSWORD
+>   环境变量 > R3 tty 交互（非 tty 报错指引）；与 ini EditPassword 的
+>   --password/SBIE_PASS 平行两套。ImBox 函数组自 845f92c git 找回
+>   （评审 pass 曾误清）。
+> - **Basic.ini 分离**：官方 [TemplateSettings] 33 个 Tmpl.X 全量迁
+>   templates\Basic.ini；V2 展开器变量优先级 = 内置表 → Basic.ini
+>   （各模板根扫描序第一个命中）→ 盒 sandbox.ini [TemplateVars]。
+>   **仓库 Templates.ini 精简**（决策）：删 [TemplateSettings] + 400 个
+>   已迁移节；保留 [DefaultTemplates]（内核给 V1 遗留盒的全局合并源）
+>   + 37 个未迁死壳（401 节删，445→45 行数级瘦身）。安装目录/布局的
+>   Templates.ini 仍随 dist 全文件分发（冻结运行时实证依赖，
+>   docs/05 §8.2）——仓库这份仅作残余/兼容源与迁移对照。
+> - **BoxTypes 六型**：Standard(既有) + Hardened/HardenedPlus/
+>   StandardPlus/AppBox/AppBoxPlus（键集对齐 docs/04 §12：UseSecurityMode/
+>   UsePrivacyMode/NoSecurityIsolation + Template=Misc\RpcPortBindingsExt；
+>   均嵌套引用 BoxTypes\Standard 作基础集 = "Template=Basic 引用基础集"
+>   的落地形态）。新命令 create-box --type 六值 + create-encbox。>
+> **附录 7（2026-09-28 加密盒波次收官 + exec 旗标泄漏根因钉死）**：
+> - **根因钉死（用户纠偏后的完整定位）**：加密盒 exec 全链
+>   "RunSandboxed GENERIC (win32 2)" 的真凶 = **exec 自身旗标泄漏**：
+>   --mount-password 抽取块位于 rest 收集之后——旗标与密码漏进命令行，
+>   服务端 CreateProcessAsUser 尝试执行名为 "--mount-password" 的可执行
+>   文件 → ERROR_FILE_NOT_FOUND(2)（[44/2] 日志形态）。逐步复刻二分
+>   （--raw-run2 系列诊断，已移除）+ SvcClient 入参打点实锤：exec 的
+>   cmd=[--mount-password pw123 "cmd /c exit 3"] vs 手工 cmd=[cmd /c
+>   exit 0]。修复 = 抽取前置到 rest 收集之前。
+>   全链 E2E 通过：exec（--mount-password）→ 盒内写文件（junction 读回
+>   "final123"）→ 进程退出 → 自动 teardown+unmount（junction 消失、
+>   ps 清空）→ data.box 头 2KB 熵 256/256。密码三路径：--mount-password
+>   ✓ / SBIE_BOX_PASSWORD ✓ / 非 tty 无密码=明确报错 ✓（tty 待人工）。
+> - **密码链统一（用户补充）**：--mount-password(exec) / --password
+>   (create-encbox) > SBIE_BOX_PASSWORD 环境变量 > R3 tty 交互；与
+>   ini EditPassword 的 --password/SBIE_PASS 平行两套凭据体系。
+> - **附带修复**：--wait 快死子进程退出码丢失（earlyExit 直接透传，
+>   规避句柄重开 TOCTOU）；自检期望根泛化为 sandbox.ini 显式
+>   FileRootPath（任意盒可声明子目录根，非加密盒专属）。
 > - 附带加固：exec 濒死窗口自愈（monitor 被外杀后残留 task/锁不再死等
 >   STATE_TIMEOUT——首次进入即 EnsureMonitorRunning 收编 stale task）。
 前置阅读：`00-architecture.md`（V1 server 模型，V2 将其废除）、`02-driver-api.md`、

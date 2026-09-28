@@ -382,10 +382,23 @@ ExpandOutput ExpandBoxConfig(const std::wstring& sandboxIniPath,
         return out;
     }
 
-    // 变量表：内置 + [TemplateVars] 覆盖
+    // 变量表（优先级低 → 高）：内置表 → templates\Basic.ini 的
+    // [TemplateSettings]（自动 Include：各模板根按扫描序取第一个命中；
+    // §2 分离规格）→ 盒 sandbox.ini [TemplateVars] 覆盖。
     std::map<std::wstring, std::wstring, CILess> vars;
     for (const auto& kv : kBuiltInTmplVars)
         vars[kv.first] = kv.second;
+    for (const auto& root : TemplateRoots()) {
+        IniFileData basic;
+        if (ParseIniFile(root + L"\\Basic.ini", &basic).Ok()) {
+            if (const IniSectionData* ts = basic.Find(L"TemplateSettings")) {
+                for (const auto& kv : ts->entries)
+                    if (_wcsnicmp(kv.key.c_str(), L"Tmpl.", 5) == 0)
+                        vars[kv.key] = kv.value;
+            }
+            break;   // 第一个命中即用（与模板引用同语义）
+        }
+    }
     if (const IniSectionData* tv = ini.Find(L"TemplateVars")) {
         for (const auto& kv : tv->entries)
             vars[kv.key] = kv.value;

@@ -16,6 +16,7 @@
 
 #include <windows.h>
 #include <string>
+#include <vector>
 
 namespace sbie::svc {
 
@@ -56,6 +57,34 @@ public:
                             const std::wstring& dir, ULONG creationFlags, RunResult* out);
     // RunSandboxed 失败时服务端回的 win32 错误码（成功清零；诊断用）
     static ULONG LastRunSandboxedWin32();
+
+
+    // ---- ImBox / MountManager（加密盒容器：create/mount/unmount/enum/query；
+    //      服务端 core/svc/MountManager.cpp，wire 头 vendor/MountManagerWire.h）----
+    // 服务端把回复 status 作为 win32 错误码（与 SBIE_INI 系列的 NTSTATUS 惯例
+    // 不同）：ERROR_DEVICE_NOT_AVAILABLE=ImDisk 驱动未装（SandboxieTools 运行时
+    // 缺席）；ERROR_NOT_FOUND=根未挂载。sizeKb：image_size 字段单位 KB。
+    struct ImDiskMount {
+        bool mounted = false;
+        std::wstring diskRoot;              // \Device\ImDiskN（NT 设备路径）
+        unsigned long long diskSize = 0;    // 字节
+        unsigned long long usedSize = 0;    // 字节
+    };
+    // fileRootDos = 盒根目录（DOS 路径，实现内加 \??\ 前缀）；镜像文件名由
+    // 服务端约定 = <file_root>.box（MountManager.cpp GetImageFileName）。
+    SbieStatus ImBoxCreate(const std::wstring& fileRootDos,
+                           unsigned long long sizeKb,
+                           const std::wstring& password);
+    // regRootNt = 盒 KeyRootPath（drv::QueryBoxPath 原样输出）。挂载即建
+    // <file_root> → 卷内 SbieDisk 的 junction；autoUnmount=true 时 SbieSvc 在
+    // 盒终止通知时自动摘 junction + 卸载 ImDisk（DriverAssist.cpp:841）。
+    SbieStatus ImBoxMount(const std::wstring& regRootNt,
+                          const std::wstring& fileRootDos,
+                          const std::wstring& password, bool protectRoot,
+                          bool adminOnly, bool autoUnmount);
+    SbieStatus ImBoxUnmount(const std::wstring& regRootNt);  // 幂等（未挂载=NOT_FOUND）
+    SbieStatus ImBoxEnum(std::vector<std::wstring>* regRoots);
+    SbieStatus ImBoxQuery(const std::wstring& regRootNt, ImDiskMount* out);
 
 private:
     SvcClient() = default;

@@ -27,6 +27,7 @@
 #include "../../SbieCore/Model/V2/V2Common.h"
 #include "../../SbieCore/Model/V2/V2Registry.h"
 #include "../../SbieCore/Model/V2/V2Task.h"
+#include "../../SbieCore/Model/V2/V2EncBox.h"
 #include "../../SbieCore/Model/V2/V2Template.h"
 #include "../../SbieCore/SvcClient/SvcClient.h"
 #include "../../SbieCore/Util/Status.h"
@@ -60,6 +61,31 @@ std::wstring CurrentExePath()
     return n ? std::wstring(buf, n) : std::wstring();
 }
 
+// ---------------------------------------------------------------------------
+// 加密盒辅助：KeyRootPath 查询 + 盒镜像密码链（用户拍板统一）：
+// --mount-password（exec）/ --password（create-encbox）旗标 > SBIE_BOX_PASSWORD
+// 环境变量 > R3 tty 交互（非 tty 失败）。与 ini EditPassword 的
+// --password/SBIE_PASS 链平行（两套凭据体系）。
+// ---------------------------------------------------------------------------
+
+std::wstring EnvBoxImagePassword()
+{
+    wchar_t env[128];
+    DWORD n = GetEnvironmentVariableW(L"SBIE_BOX_PASSWORD", env, 128);
+    if (n > 0 && n < 128)
+        return std::wstring(env, n);
+    return L"";
+}
+
+std::wstring EncRegRootOf(const std::wstring& box)
+{
+    std::wstring fileRoot, regRoot, ipcRoot;
+    if (drv::QueryBoxPath(box, &fileRoot, &regRoot, &ipcRoot)
+        != SbieStatus::OK)
+        return L"";
+    return regRoot;
+}
+
 // 启动后的公共尾巴：任务文件 + 公共 monitor 拉起
 V2Err AfterStart(const BoxTarget& t)
 {
@@ -70,6 +96,8 @@ V2Err AfterStart(const BoxTarget& t)
     task.alias = t.alias;
     task.creatorPid = GetCurrentProcessId();
     task.created = NowIsoTimestamp();
+    task.encrypted = IsEncryptedBox(t.boxDir);
+    task.regRoot = EncRegRootOf(t.box);
     V2Err e = WriteTask(task);
     if (!e.Ok())
         return e;
@@ -191,21 +219,38 @@ std::wstring BuildCommandLine(const std::vector<std::wstring>& args)
 int CmdExec(const CommandContext& ctx)
 {
     const GlobalOptions& opts = ctx.opts;
+    // --mount-password 提前抽取（不进 cmdline；加密盒挂载用，区别于配置
+    // EditPassword 的 --password）。必须在 rest 收集之前完成——否则旗标
+    // 漏进命令行（实测根因：服务端 CreateProcessAsUser 找名为
+    // "--mount-password" 的可执行文件 → ERROR_FILE_NOT_FOUND(2)）
+    std::wstring mountPassword;
+    std::vector<std::wstring> argsClean;
+    argsClean.push_back(ctx.args[0]);
+    for (size_t i = 1; i < ctx.args.size(); ++i) {
+        if (ctx.args[i] == L"--mount-password"
+            && i + 1 < ctx.args.size())
+            mountPassword = ctx.args[++i];
+        else
+            argsClean.push_back(ctx.args[i]);
+    }
+
     std::vector<std::wstring> rest;   // cmdline
     // --wait 由全局解析器置 opts.execWait（显式分支拦截，不进 positional）
     bool waitChild = opts.execWait;
-    for (size_t i = 2; i < ctx.args.size(); ++i) {
-        if (ctx.args[i] == L"--wait")
+    for (size_t i = 2; i < argsClean.size(); ++i) {
+        if (argsClean[i] == L"--wait")
             waitChild = true;   // 冗余防线（直接调用 ctx 的场景）
-        else if (ctx.args[i] == L"--detach")
+        else if (argsClean[i] == L"--detach")
             ;   // 历史别名：立即退出已是默认（R1），解析以兼容旧脚本
         else
-            rest.push_back(ctx.args[i]);
+            rest.push_back(argsClean[i]);
     }
+    const std::vector<std::wstring>& cleaned = argsClean;
     if (ctx.args.size() < 2)
         return EmitError(opts, SbieStatus::USAGE,
-                         L"usage: sbie-cli exec PATH\\TO\\box|*alias [cmdline] [--wait]");
-    const std::wstring target = ctx.args[1];
+                         L"usage: sbie-cli exec PATH\\TO\\box|*alias [cmdline] "
+                         L"[--wait] [--mount-password <pw>]");
+    const std::wstring target = cleaned[1];
 
     if (!drv::LoadSbieDll(opts.sbieDllPath))
         return EmitError(opts, SbieStatus::DRIVER_UNAVAILABLE, L"SbieDll.dll not available");
@@ -285,7 +330,7 @@ int CmdExec(const CommandContext& ctx)
                 // S2：他人正在注册（或孤儿锁且注册已被清）；等待后重探
             } else {
                 std::wstring owner;
-                if (CacheBelongsToOtherDir(t.box, t.boxDir, &owner))
+                if (CacheBelongsToOtherBox(t.box, t.boxDir, &owner))
                     return Fail(opts,
                                 {SbieStatus::INVALID,
                                  L"box name '" + t.box
@@ -329,7 +374,7 @@ int CmdExec(const CommandContext& ctx)
                     // （幂等刷新缓存）直启。TaskExists 时为 teardown 摘锁后
                     // 尚未删缓存的濒死窗口——不当接管，循环重探走 S6→S0。
                     std::wstring owner;
-                    if (CacheBelongsToOtherDir(t.box, t.boxDir, &owner))
+                    if (CacheBelongsToOtherBox(t.box, t.boxDir, &owner))
                         return Fail(opts,
                                     {SbieStatus::INVALID,
                                      L"box name '" + t.box
@@ -387,6 +432,35 @@ int CmdExec(const CommandContext& ctx)
         waited += 200;
     }
 
+    // ---- 加密盒（UseFileImage=y）：spawn 前预挂载 ----
+    // 冻结链路：AcquireBoxRoot（DriverAssistInject）在盒启动时找现有挂载
+    // 复用，但其自动挂载路径不携带密码（BoxPassword 查询在 5.73.5 被注释，
+    // MountManager.cpp:1147）——加密容器必须由本命令带密码 IMBOX_MOUNT
+    // 预挂（autoUnmount=true：盒终止时 SbieSvc 自动摘除）。
+    if (IsEncryptedBox(t.boxDir)) {
+        std::wstring fileRoot, regRoot, ipcRoot;
+        if (drv::QueryBoxPath(t.box, &fileRoot, &regRoot, &ipcRoot)
+            != SbieStatus::OK)
+            return Fail(opts, {SbieStatus::GENERIC,
+                               L"cannot query KeyRootPath of '" + t.box
+                                   + L"' for encbox mount"});
+        std::wstring pw = !mountPassword.empty() ? mountPassword
+                                                 : EnvBoxImagePassword();
+        if (pw.empty()) {
+            std::wstring entered;
+            if (!ReadPasswordFromTty(&entered))
+                return EmitError(opts, SbieStatus::ACCESS_DENIED,
+                                 L"encrypted box requires the image password; "
+                                 L"non-interactive stdin - use "
+                                 L"--mount-password <pw> or the "
+                                 L"SBIE_BOX_PASSWORD environment variable");
+            pw = std::move(entered);
+        }
+        V2Err me = MountEncBox(t.box, t.boxDir, regRoot, pw);
+        if (!me.Ok())
+            return Fail(opts, me);
+    }
+
     // ---- 预热：任务文件 + 公共 monitor（先于 spawn）----
     // 竞态修复（实测）：盒内进程启动要求本会话存在活的 session leader
     // （SbieDll init → epmapper/actkernel 链依赖），OSS dist 中 leader =
@@ -427,12 +501,16 @@ int CmdExec(const CommandContext& ctx)
     // 子进程已死且盒内无用户进程 = 落入上一代注销的注入结算窗口（实测
     // 2-6s 静默夭折，退出码 4/127）→ 结算 4s 后重 spawn 一次。首启/健康
     // 路径仅多 300ms 探活，不阻塞返回语义。
+    DWORD earlyExit = 0;
+    bool earlyDead = false;
     if (rr.hProcess
         && WaitForSingleObject(rr.hProcess, 300) == WAIT_OBJECT_0) {
         DWORD early = 0;
         GetExitCodeProcess(rr.hProcess, &early);
         CloseHandle(rr.hProcess);
         rr.hProcess = nullptr;
+        earlyExit = early;
+        earlyDead = true;
         V2Err ce;
         size_t user = BoxUserProcessCount(t.box, &ce);
         if ((early == 4 || early == 127) && ce.Ok() && user == 0) {
@@ -476,8 +554,8 @@ int CmdExec(const CommandContext& ctx)
             CloseHandle(rr.hProcess);
         return 0;   // R1：spawn 成功即退（rc=0）
     }
-    DWORD code = 0;
-    if (rr.hProcess) {
+    DWORD code = earlyExit;   // 快死子进程的退出码已在 300ms 探活窗口取得
+    if (!earlyDead && rr.hProcess) {
         WaitForSingleObject(rr.hProcess, INFINITE);
         GetExitCodeProcess(rr.hProcess, &code);
         CloseHandle(rr.hProcess);

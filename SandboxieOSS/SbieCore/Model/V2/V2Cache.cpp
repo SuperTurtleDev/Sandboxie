@@ -36,7 +36,8 @@ std::string BuildCacheText(const std::wstring& box, const std::wstring& boxDir,
 V2Err WriteBoxCache(const std::wstring& box, const std::wstring& boxDir,
                     const std::wstring& sandboxIniPath,
                     const std::vector<IniKeyValue>& kv,
-                    const std::vector<std::wstring>& appliedTemplates)
+                    const std::vector<std::wstring>& appliedTemplates,
+                    const std::wstring& expectedRoot)
 {
     if (!EnsureRuntimeDirs())
         return {SbieStatus::GENERIC, L"cannot create runtime dirs under " + AppDataRoot()};
@@ -44,10 +45,11 @@ V2Err WriteBoxCache(const std::wstring& box, const std::wstring& boxDir,
     V2Err e = WriteTextFileAtomic(CachePathFor(box), text);
     if (!e.Ok())
         return {SbieStatus::CACHE_INVALID, L"cache write failed: " + e.msg};
-    return ValidateCacheFile(box, boxDir);
+    return ValidateCacheFile(box, boxDir, expectedRoot);
 }
 
-V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir)
+V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir,
+                        const std::wstring& expectedRoot)
 {
     const std::wstring path = CachePathFor(box);
     IniFileData ini;
@@ -68,7 +70,11 @@ V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir)
                     L"cache self-check: residual Template= line (must be zero)"};
         if (_wcsicmp(kv.key.c_str(), L"FileRootPath") == 0) {
             haveRoot = true;
-            if (_wcsicmp(kv.value.c_str(), boxDir.c_str()) != 0)
+            // 加密盒（UseFileImage=y）的声明根 = <boxDir>\data（junction 目标）；
+            // 普通盒 = boxDir。expectedRoot 缺省 = boxDir。
+            const std::wstring& want = expectedRoot.empty() ? boxDir
+                                                            : expectedRoot;
+            if (_wcsicmp(kv.value.c_str(), want.c_str()) != 0)
                 return {SbieStatus::CACHE_INVALID,
                         L"cache self-check: FileRootPath mismatch: " + kv.value};
         }

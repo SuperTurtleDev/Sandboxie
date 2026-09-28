@@ -42,6 +42,9 @@ V2Err ProbeRegistration(const std::wstring& box, RegState* state);
 // 缓存指向其他目录（ownerOut 填该目录）。
 bool CacheBelongsToOtherDir(const std::wstring& box, const std::wstring& boxDir,
                             std::wstring* ownerOut /*=nullptr*/);
+// 加密盒包装：<dir> 与 <dir>\data 两个合法声明根均比对（谁都不属于他属）
+bool CacheBelongsToOtherBox(const std::wstring& box, const std::wstring& boxDir,
+                            std::wstring* ownerOut /*=nullptr*/);
 
 // 轮询等待（wantPresent=true 等注册可见 / false 等注册消失）。
 // 50ms 起指数退避至 200ms；超时 ms 返回 false（非错误码——调用方定语境）。

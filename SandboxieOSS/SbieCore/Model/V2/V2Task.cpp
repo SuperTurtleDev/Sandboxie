@@ -29,6 +29,8 @@ V2Err WriteTask(const TaskEntry& t)
     o.set(L"alias", json::JsonValue(t.alias));
     o.set(L"creator_pid", json::JsonValue((long long)t.creatorPid));
     o.set(L"created", json::JsonValue(t.created));
+    o.set(L"encrypted", json::JsonValue(t.encrypted));
+    o.set(L"reg_root", json::JsonValue(t.regRoot));
     return WriteTextFileAtomic(TaskPathFor(t.box), json::SerializeUtf8(o));
 }
 
@@ -80,6 +82,14 @@ std::vector<TaskEntry> EnumTasks()
                 t.creatorPid = (DWORD)v->asInt();
         if (const json::JsonValue* v = root.find(L"created"))
             t.created = v->asString();
+        if (const json::JsonValue* v = root.find(L"encrypted")) {
+            if (v->type() == json::JsonValue::Type::Bool)
+                t.encrypted = v->asBool();
+            else if (v->isInt())
+                t.encrypted = v->asInt() != 0;
+        }
+        if (const json::JsonValue* v = root.find(L"reg_root"))
+            t.regRoot = v->asString();
         if (!t.box.empty())
             list.push_back(std::move(t));
     } while (FindNextFileW(h, &fd));

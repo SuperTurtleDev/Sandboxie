@@ -25,13 +25,18 @@ std::string BuildCacheText(const std::wstring& box, const std::wstring& boxDir,
                            const std::vector<std::wstring>& appliedTemplates);
 
 // 写缓存（tmp + 原子替换）+ 写后自检。成功后缓存即为注册工件。
+// expectedRoot = 该盒声明的 FileRootPath（普通盒 = boxDir；加密盒 =
+// <boxDir>\data——UseFileImage=y 时 FileRootPath 指向 junction 目标）。
 V2Err WriteBoxCache(const std::wstring& box, const std::wstring& boxDir,
                     const std::wstring& sandboxIniPath,
                     const std::vector<IniKeyValue>& kv,
-                    const std::vector<std::wstring>& appliedTemplates);
+                    const std::vector<std::wstring>& appliedTemplates,
+                    const std::wstring& expectedRoot = std::wstring());
 
-// 自检（读回解析；也用于校验外部生成/手改的缓存）
-V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir);
+// 自检（读回解析；也用于校验外部生成/手改的缓存）。expectedRoot 语义同上，
+// 缺省 = boxDir（向后兼容）。
+V2Err ValidateCacheFile(const std::wstring& box, const std::wstring& boxDir,
+                        const std::wstring& expectedRoot = std::wstring());
 
 bool CacheExists(const std::wstring& box);
 V2Err DeleteBoxCache(const std::wstring& box);   // 不存在 = 成功（幂等）

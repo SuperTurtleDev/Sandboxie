@@ -10,6 +10,7 @@
 #include "../../SbieCore/Model/V2/V2Common.h"
 #include "../../SbieCore/Model/V2/V2Registry.h"
 #include "../../SbieCore/Model/V2/V2Task.h"
+#include "../../SbieCore/Model/V2/V2EncBox.h"
 #include "../../SbieCore/SvcClient/SvcClient.h"
 #include "../../SbieCore/Util/Status.h"
 #include "../../SbieCore/Util/Utf8.h"
@@ -104,6 +105,13 @@ bool TeardownBox(const model::v2::TaskEntry& t)
         MLog(L"  warning: registration still visible after 10s (cache file absent, "
              L"next reload will clear)");
     model::v2::DeleteTask(t.box);
+    // 加密盒兜底 unmount（AutoUnmount=true 时 SbieSvc 通常已在盒终止通知
+    // 卸载——此处幂等补一刀，防 AutoUnmount 链路缺席时卷滞留）
+    if (t.encrypted && !t.regRoot.empty()) {
+        model::v2::V2Err ue = model::v2::UnmountEncBox(t.regRoot);
+        if (!ue.Ok())
+            MLog(L"  warning: encbox unmount failed: " + ue.msg);
+    }
     // （无 <box>.dead 墓碑：R1 起结算窗口由 exec 侧 spawn 后探活反应式自愈
     // 处理，墓碑无读取方）
     MLog(L"teardown done for '" + t.box + L"'");

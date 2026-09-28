@@ -18,6 +18,8 @@ struct TaskEntry {
     std::wstring box, boxPath, cache, alias;
     DWORD creatorPid = 0;
     std::wstring created;
+    bool encrypted = false;       // UseFileImage=y 盒：teardown 兜底 unmount
+    std::wstring regRoot;         // 加密盒 KeyRootPath（NT），unmount 用
 };
 
 bool TaskExists(const std::wstring& box);
