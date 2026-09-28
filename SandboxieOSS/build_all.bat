@@ -143,9 +143,19 @@ set "BIN64=%REPO%\Sandboxie\Bin\x64\SbieRelease"
 set "BIN32=%REPO%\Sandboxie\Bin\Win32\SbieRelease"
 set "TOOLS=%REPO%\SandboxieTools\x64\Release"
 
-if exist "%OUT%" rmdir /s /q "%OUT%"
-if exist "%OUT%" ( echo [ERROR] cannot clean stale "%OUT%" & goto :fail )
-mkdir "%OUT%\32" "%OUT%\driver" || goto :fail
+REM Empty the layout IN PLACE (children first): the root itself may be
+REM pinned as an external process's CWD (documented hazard class - see
+REM make_dist.bat SBIEOSS_DISTROOT note about dist\ locked by a shell
+REM sitting inside it). Deleting all children achieves the identical
+REM fresh state without requiring the root handle to be free.
+if exist "%OUT%" (
+    for /d %%d in ("%OUT%\*") do rmdir /s /q "%%d"
+    del /f /q "%OUT%\*" >nul 2>&1
+)
+REM fail loudly if anything survived the cleanup (locked file/dir)
+dir /b "%OUT%" 2>nul | findstr . >nul && ( echo [ERROR] cannot clean stale "%OUT%" & goto :fail )
+if not exist "%OUT%\32"     mkdir "%OUT%\32"     || goto :fail
+if not exist "%OUT%\driver" mkdir "%OUT%\driver" || goto :fail
 
 REM x64 core runtime
 REM All five in-sandbox service stubs ship: RpcSs + DcomLaunch are started
@@ -157,10 +167,24 @@ REM exe; NOT template-gated - if absent the in-box feature silently fails).
 REM Combined ~0.4MB, ship all (docs/05 section 8.2 revision).
 for %%f in (SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe) do copy /y "%BIN64%\%%f" "%OUT%\%%f" >nul || goto :fail
 copy /y "%TOOLS%\ImBox.exe" "%OUT%\ImBox.exe" >nul || goto :fail
-REM Full V1 Templates.ini goes into the LAYOUT only; make_dist.bat replaces
-REM it with the minimal OSS stub in the distributed tree (V2 expands
-REM templates entirely in user space; the kernel never consumes them).
-copy /y "%REPO%\Sandboxie\install\Templates.ini" "%OUT%\Templates.ini" >nul || goto :fail
+REM Trimmed OSS Templates.ini from the source tree (deployment
+REM principle: templates\ = migrated V2 tree, Templates.ini = the
+REM unmigrated residue + frozen-runtime startup skeleton). The
+REM kernel reads (Home)\Templates.ini at every config reload
+REM (core\drv\conf.c Conf_Read); the skeleton sections are
+REM load-bearing - [TemplateDefaultPaths] carries
+REM OpenIpcPath=\KnownDlls\* without which boxed processes die
+REM (SBIE2112, child exit 127). Full evidence + A/B matrix in
+REM docs/05-build.md section 8.2.
+copy /y "%OSSDIR%\Templates.ini" "%OUT%\Templates.ini" >nul || goto :fail
+
+REM V2 template tree mirrored into the layout from the source tree
+REM (robocopy /MIR = exact sync incl. stale-file purge, so the
+REM layout can never drift from the source; exit 0-7 = success).
+REM This is the SBIE_TEMPLATE_DIR initial content; sbie-cli also
+REM falls back to <exe dir>\templates automatically.
+robocopy "%OSSDIR%\templates" "%OUT%\templates" /MIR /NJH /NJS /NDL /NFL >nul
+if errorlevel 8 ( echo [ERROR] robocopy templates into layout failed & goto :fail )
 
 REM VC runtime trio - layout runs on machines without the VC++ redist
 for %%f in (msvcp140.dll vcruntime140.dll vcruntime140_1.dll) do copy /y "%VCToolsRedistDir%\x64\Microsoft.VC143.CRT\%%f" "%OUT%\%%f" >nul || goto :fail
@@ -206,6 +230,10 @@ for %%f in (%FACE%) do if not exist "%OUT%\%%f" call :add_missing "%%f"
 for %%f in (SbieDll.dll SbieSvc.exe) do if not exist "%OUT%\32\%%f" call :add_missing "32\%%f"
 for %%f in (SbieDrv.sys SbieDrv.inf) do if not exist "%OUT%\driver\%%f" call :add_missing "driver\%%f"
 if not exist "%OUT%\sbie-gui\sbie-gui.exe" call :add_missing "sbie-gui\sbie-gui.exe"
+if not exist "%OUT%\templates\BoxTypes\Standard.ini" call :add_missing "templates\BoxTypes\Standard.ini"
+if not exist "%OUT%\templates\Basic.ini" call :add_missing "templates\Basic.ini"
+REM layout Templates.ini must be byte-identical to the source asset
+fc /b "%OUT%\Templates.ini" "%OSSDIR%\Templates.ini" >nul 2>&1 || call :add_missing "Templates.ini (differs from SandboxieOSS\Templates.ini)"
 if defined MISSING (
     echo [ERROR] incomplete layout:%MISSING%
     goto :fail

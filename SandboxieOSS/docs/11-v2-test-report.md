@@ -679,9 +679,13 @@ SandMan 运行中、无运行目录、ini 无 ImportBox、SbieSvc/SbieDrv RUNNIN
   `System\WindowsExplorer`（FakeAdminRights 等）、`Print\
   AdobeAcrobatReader`（OpenPipePath×2 + NoRenameWinClass）——3/3 展开
   正确、**零 `Template=` 残留**；不存在模板名给 rc=11 明确信封（正确）。
-- dist `Templates.ini` 仍为 446 节全量文件（仓库新增的 45 节精简版在
-  `SandboxieOSS\Templates.ini` 未部署）——按 docs/05 §8.2 冻结运行时需全量
-  文件，**dist 保留 446 为正确行为**，特此澄清非缺口。
+- dist `Templates.ini`（当时为 446 节全量）——本报告原文按 docs/05
+  §8.2 当时的"冻结运行时需全量"结论判定"dist 保留 446 为正确行为"。
+  **该结论已于 2026-09-28 被干净 A/B 矩阵推翻并修订**（docs/05 §8.2
+  修订 2）：全量不必须，真正的载荷是骨架节（`[TemplateDefaultPaths]`
+  的 `\KnownDlls\*` 开放路径等）；现 dist 部署源树裁剪版
+  `SandboxieOSS\Templates.ini`（951 行/45 节/0 引用），`--verify`
+  以与源字节一致为门。此段保留原判仅作历史记录，以 docs/05 现版为准。
 
 ## E3 — 明文盒快速回归（全过）
 

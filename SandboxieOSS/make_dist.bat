@@ -36,17 +36,22 @@ REM      Scm_StartBoxedService2): a boxed StartService of
 REM      bits/wuauserv/cryptsvc launches the matching stub; NOT
 REM      template-gated, and missing stubs mean the in-box feature
 REM      silently fails. ~0.4MB combined - all five ship.
-REM    - Templates.ini: the ORIGINAL full file ships (byte-identical from the
-REM      layout). A minimal OSS stub was prototyped and REJECTED on evidence:
-REM      with a stubbed home Templates.ini, sandboxed process startup breaks
-REM      deterministically on the frozen 5.73.5 runtime (A/B/A verified twice:
-REM      full=ok, stub=child exit 127 + SYSTEM-context log flood; consumer
-REM      lives in frozen core\dll/core\svc code). V2 never consumes this file
-REM      for its own boxes (user-space expansion, zero Template= residue) -
-REM      it ships purely to keep the frozen runtime healthy. Revisit a slim
-REM      file post-freeze. docs/05-build.md section 8.2 records the evidence.
-REM    - templates\ = the V2 template tree (400 files, migrated from
-REM      install\Templates.ini by "sbie-cli --migrate-templates").
+REM    - Templates.ini: ships the TRIMMED file byte-identical from the
+REM      source asset SandboxieOSS\Templates.ini (deployment principle:
+REM      templates\ = migrated V2 tree, Templates.ini = unmigrated
+REM      residue + frozen-runtime startup skeleton). An earlier claim
+REM      "a minimal stub breaks sandboxed startup, full file required"
+REM      was SUPERSEDED 2026-09-28 by a clean A/B matrix (docs/05-build.md
+REM      section 8.2): what actually kills boxed processes is dropping
+REM      [TemplateDefaultPaths] (its OpenIpcPath=\KnownDlls\* is
+REM      load-bearing: SBIE2112 OpenSection access denied on
+REM      \KnownDlls\kernel32.dll => child exit 127). The trimmed
+REM      skeleton passes all probes on standard/app-plus/hardened-plus
+REM      box types; the 400 migrated [Template_*] bodies are NOT needed
+REM      here. --verify enforces byte-identity against the source file.
+REM    - templates\ = the V2 template tree (406 files), mirrored from
+REM      the source tree SandboxieOSS\templates\ by build_all.bat
+REM      (robocopy /MIR; make_dist re-syncs from the same source).
 REM      It is the initial SBIE_TEMPLATE_DIR content; sbie-cli also
 REM      falls back to <exe dir>\templates automatically, so the
 REM      dist is zero-config self-contained.
@@ -103,8 +108,9 @@ if not exist "%LAYOUT%\sbie-cli.exe" (
 )
 
 REM root files copied flat into the dist root.
-REM Templates.ini = the ORIGINAL full file (see header note: the minimal stub
-REM was rejected on evidence - it breaks spawns on the frozen runtime).
+REM Templates.ini = the trimmed source asset (see header note: the
+REM frozen runtime needs the startup skeleton sections, NOT the full
+REM legacy file - docs/05-build.md section 8.2 A/B evidence).
 set "ROOT_FILES=sbie-cli.exe SbieSvc.exe SbieDll.dll SbieMsg.dll KmdUtil.exe ImBox.exe SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe SandboxieWUAU.exe SandboxieCrypto.exe Templates.ini msvcp140.dll vcruntime140.dll vcruntime140_1.dll"
 REM V2 template tree (initial SBIE_TEMPLATE_DIR content + exe-dir fallback)
 set "TPL_SRC=%OSSDIR%\templates"
@@ -208,16 +214,18 @@ if errorlevel 1 (
     goto :fail
 )
 
-REM V2 dist invariants: full Templates.ini present (UTF-16 file - findstr
-REM cannot match it; verify by size: full = ~152KB, any stub would be <2KB)
-REM + template tree + five service stubs
+REM V2 dist invariants: Templates.ini byte-identical to the source
+REM asset (fc /b; UTF-8+BOM file, findstr cannot match it - and a
+REM size gate would not prove content) + template tree hash-identical
+REM to the source tree + five service stubs
 set "VD=%VDIR%\%DIST_NAME%"
-set "TPLSZ=0"
-for %%A in ("%VD%\Templates.ini") do set "TPLSZ=%%~zA"
-if %TPLSZ% LSS 100000 (
-    echo [ERROR] Templates.ini too small - %TPLSZ% bytes, expected the full 152KB original
+fc /b "%VD%\Templates.ini" "%OSSDIR%\Templates.ini" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] dist Templates.ini differs from SandboxieOSS\Templates.ini - dist content must derive from the source tree
     goto :fail
 )
+powershell -NoProfile -Command "$s='%TPL_SRC%'; $d='%VD%\templates'; $hs=@{}; Get-ChildItem -LiteralPath $s -Recurse -File | ForEach-Object { $hs[$_.FullName.Substring((Get-Item -LiteralPath $s).FullName.Length+1)] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }; $bad=@(); Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $rel=$_.FullName.Substring((Get-Item -LiteralPath $d).FullName.Length+1); if(-not $hs.ContainsKey($rel) -or $hs[$rel] -ne (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash){ $bad+=$rel }; $hs.Remove($rel) }; if($hs.Count -gt 0){ $bad+=($hs.Keys | ForEach-Object { 'missing-in-dist: '+$_ }) }; if($bad.Count -gt 0){ $bad | ForEach-Object { Write-Host ('[ERROR] templates tree differs: '+$_) }; exit 1 }; exit 0"
+if errorlevel 1 goto :fail
 if not exist "%VD%\templates\BoxTypes\Standard.ini" (
     echo [ERROR] V2 template tree missing: templates\BoxTypes\Standard.ini not found
     goto :fail
@@ -228,7 +236,7 @@ for %%f in (SandboxieRpcSs.exe SandboxieDcomLaunch.exe SandboxieBITS.exe Sandbox
         goto :fail
     )
 )
-echo V2 invariants OK: full Templates.ini + templates tree + 5 service stubs present.
+echo V2 invariants OK: trimmed Templates.ini byte-identical to source + templates tree hash-identical + 5 service stubs present.
 
 REM driver cat / signature status: REPORT ONLY, never a gate.
 REM A stock WDK build emits no cat and a test-signed sys - that is
