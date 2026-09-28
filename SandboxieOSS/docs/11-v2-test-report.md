@@ -624,3 +624,85 @@ style 10 项、note 7 项记录在案；SVC/驱动接口面零误用。带入四
 **V2 代码面达到交付标准**；遗留事项均属"拍板类"（-w 后续方案、docs\10 两处
 文档偏差补记）而非代码缺陷。
 
+
+---
+
+# 加密盒复测节 — commit fcd69f3（构建 14:50:20，2026-09-28 14:54–15:11）
+
+范围：加密盒专项 + 模板面回归 + 明文盒快速回归。基线快照 baseline4（起始：
+SandMan 运行中、无运行目录、ini 无 ImportBox、SbieSvc/SbieDrv RUNNING）。复测
+窗口无外部活动。
+
+## E1 — 加密盒专项（4/4 位置×模式全周期 PASS）
+
+| 轮 | 场景 | create | exec(挂载) | 二次 exec(已挂载,写) | 宿主读回 | teardown |
+|---|---|---|---|---|---|---|
+| r1 | 新目录 + `--mount-password` | rc=0 | rc=0 | rc=0 | `encmark4110` 精确 | junction 摘除 + data.box 保留 + waitgone ok |
+| r2b | 父目录含空格（`Enc Boxes\`） | rc=0 | rc=0 | rc=0 | `encmarksp19210` | 同上 ok |
+| r3 | 相对路径（create 与 exec 均裸名） | rc=0 | rc=0 | rc=0 | `encmark7x21500` | 同上 ok |
+| r4 | `SBIE_BOX_PASSWORD` 环境变量路径（无旗标） | rc=0 | rc=0 | rc=0 | `encmark18634` | 同上 ok |
+
+- 容器工件：4/4 均为 **268435456 B（256MiB 精确）**；sandbox.ini 含
+  `UseFileImage=y` + `FileRootPath=<dir>\data`；**头 2KB 熵抽查 4/4：
+  distinct=256/256 字节值全出现，gzip(2048B)=2079B（不可压缩）**。
+- 负路径：exec 无密码非 tty → `rc=6 "encrypted box requires the image
+  password; non-interactive stdin - use --mount-password <pw> or the
+  SBIE_BOX_PASSWORD environment variable"`（信封完美）；create 无密码非
+  tty → 同款指引且**不留目录残留**；错密码 → `rc=1 mount data.box failed
+  for '<box>'`（可定位；"(GENERIC) (GENERIC)" 双重后缀为文案小疵）。
+- 盒目录基名含空格/连字符被正确拒绝（rc=7 INVALID，§4.2 盒名=基名约束，
+  非缺陷——空格仅允许父目录）。
+- **R3 tty 交互分支：本环境无 tty 不可测，标注待人工（不阻塞判定）。**
+- minor（新）：**错密码/无密码失败后的快速重试会撞 STATE_TIMEOUT**——失败
+  的 exec 已完成注册，残留代际需 monitor teardown（>默认 10s settle）；自愈，
+  一次交错负路径测试中观察到 waitgone 卡需 recover。建议失败路径复用
+  CleanupAfterSpawnFailure 语义尽早回收。
+
+## E2 — 模板面回归
+
+- **Basic.ini 变量**：`%Tmpl.Firefox%` 正确冻结展开（→
+  `%AppData%\Mozilla\Firefox\Profiles\*`）；盒级 `[TemplateVars]` 覆盖生效且
+  值逐字节透传（`D:\zz\gg` → `D:\zz\gg\logins.json`）。测试中一度疑似的
+  `\f` 吞噬经隔离复验为**本人 printf 转义假象**（JSON 传输折叠 `\` 后 printf
+  做 C 转义），产品无辜，如实披露。
+- **六型 create-box**：
+  - **dist 树（默认解析）：1/6 可用**——standard 全过；hardening /
+    hardened-plus / standard-plus / app / app-plus 五型 exec 全部
+    `rc=11 template: not found: BoxTypes\<X>`。**根因：dist
+    `Installer\SbieOSS_x64\templates\BoxTypes\` 只部署了 Standard.ini（旧
+    版），5 个新模板文件未随构建部署**（仓库 `SandboxieOSS\templates\
+    BoxTypes\` 六件齐全且 Standard.ini 为新版）。
+  - **仓库树（SBIE_TEMPLATE_DIR 指向 repo）：6/6 exec PASS**，型键正确
+    （hardened_plus 含 UsePrivacyMode+UseSecurityMode 等）→ **代码无恙，
+    纯部署缺口**。
+- **三模板展开抽查**：`Misc\RpcPortBindings`（RpcPortBinding×6）、
+  `System\WindowsExplorer`（FakeAdminRights 等）、`Print\
+  AdobeAcrobatReader`（OpenPipePath×2 + NoRenameWinClass）——3/3 展开
+  正确、**零 `Template=` 残留**；不存在模板名给 rc=11 明确信封（正确）。
+- dist `Templates.ini` 仍为 446 节全量文件（仓库新增的 45 节精简版在
+  `SandboxieOSS\Templates.ini` 未部署）——按 docs/05 §8.2 冻结运行时需全量
+  文件，**dist 保留 446 为正确行为**，特此澄清非缺口。
+
+## E3 — 明文盒快速回归（全过）
+
+exec 默认即退 rc=0；`--wait` 退出码 9 精确透传；ps 可见；kill-box → 归零
+teardown ok；log dump rc=0 8/8 可读 + `--box` 过滤 9/9 全命中——**加密盒钩子
+未误伤明文盒路径**。（log 测试短暂停 SandMan 后已 `-autorun` 复启。）
+
+## 环境恢复确认（对照 baseline4）
+
+ini 与 baseline4 字节级一致（ImportBox=0）；`%LOCALAPPDATA%\SandboxieOSS`
+整目录删除（含 4×256MiB 测试容器）；无 sbie-cli/monitor 进程；SbieSvc/SbieDrv
+RUNNING 未动；生产/被测安装目录双双 diff 零；全部测试目录（含 `Enc Boxes`、
+相对路径盒）清除；SandMan 运行中（复启后 pid 169036，= 起始运行态）。
+
+## 最终判定：FAIL → 退回（仅一项：dist 部署缺口；修复动作极小）
+
+- 加密盒功能本体（容器/挂载/密码三路径/读写回环/自动卸载/熵）**全部通过**，
+  模板引擎与明文盒回归零回退——代码层面已达"待 push"质量。
+- **唯一拦路项**：`Installer\SbieOSS_x64\templates\BoxTypes\` 缺 5 个新模板
+  文件且 Standard.ini 为旧版 → 按默认部署路径 **六型中 5/6 在 exec 时
+  TEMPLATE_ERROR**。修复 = 重跑打包/同步 6 文件（仓库源已齐）。
+- 微复测建议：补部署后仅测 dist 树六型 exec（6 行命令级验证），其余面无需
+  重跑。带去后续：wrong-pw 文案双后缀、失败后快速重试 STATE_TIMEOUT、
+  R3 tty 待人工、-w 等待新增残留（前轮已备案）。
