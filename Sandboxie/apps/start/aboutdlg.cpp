@@ -71,15 +71,6 @@ static HBITMAP hLogoBitmap;
 
 static BOOL initialized = FALSE;
 
-static BOOL g_bReminder = FALSE;
-
-static int btnActions[3] = { 0, 0, 0 };
-
-static UINT_PTR timer_id = 0;
-static int btnCountDown = 5;
-
-static int Days = 0;
-
 extern BOOLEAN layout_rtl;
 
 //---------------------------------------------------------------------------
@@ -160,31 +151,16 @@ INT_PTR AboutDialogProc(
             //
 
             WCHAR* info = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, 2048);
-            if (g_bReminder) 
-            {
-                WCHAR sDays[10];
-                swprintf(sDays, L"%d", Days);
-                wcscpy(info, SScopedStr(SbieDll_FormatMessage1(MSG_6010, sDays)).c_str);
 
-                for (int s = rand() % 3, i = 0; i < 3; i++)
-                    btnActions[i] = (s + i) % 3;
+            wcscpy(info, SScopedStr(SbieDll_FormatMessage1(MSG_3302, _T(MY_VERSION_STRING))).c_str);
+            wcscat(info, L"\r\n\r\n");
+            wcscat(info, _T(MY_COPYRIGHT_STRING));
+            wcscat(info, L"\r\n");
+            wcscat(info, _T(MY_COPYRIGHT_STRING_OLD));
 
-                SetDlgItemText(hwnd, ID_BUTTON_2, SScopedStr(SbieDll_FormatMessage0(MSG_6011)).c_str);
-
-                timer_id = SetTimer(hwnd, 'wait', 1000, NULL);
-            }
-            else
-            {
-                wcscpy(info, SScopedStr(SbieDll_FormatMessage1(MSG_3302, _T(MY_VERSION_STRING))).c_str);
-                wcscat(info, L"\r\n\r\n");
-                wcscat(info, _T(MY_COPYRIGHT_STRING));
-                wcscat(info, L"\r\n");
-                wcscat(info, _T(MY_COPYRIGHT_STRING_OLD));
-
-                ShowWindow(GetDlgItem(hwnd, ID_BUTTON_1), SW_HIDE);
-                SetDlgItemText(hwnd, ID_BUTTON_2, SScopedStr(SbieDll_FormatMessage0(MSG_3001)).c_str);
-                ShowWindow(GetDlgItem(hwnd, ID_BUTTON_3), SW_HIDE);
-            }
+            ShowWindow(GetDlgItem(hwnd, ID_BUTTON_1), SW_HIDE);
+            SetDlgItemText(hwnd, ID_BUTTON_2, SScopedStr(SbieDll_FormatMessage0(MSG_3001)).c_str);
+            ShowWindow(GetDlgItem(hwnd, ID_BUTTON_3), SW_HIDE);
 
             SetDlgItemText(hwnd, ID_ABOUT_INFO, info);
             HeapFree(GetProcessHeap(), 0, info);
@@ -199,63 +175,13 @@ INT_PTR AboutDialogProc(
         }
 
         //
-        // handle timer
-        //
-
-        case WM_TIMER:
-        {
-            if (wParam != 'wait')
-                break;
-
-            if (btnCountDown >= 0) 
-            {
-                if (btnCountDown-- > 0) 
-                {
-                    WCHAR wait[10];
-                    swprintf(wait, L"%d", btnCountDown + 1);
-                    SetDlgItemText(hwnd, ID_BUTTON_2, wait);
-                }
-                else 
-                {
-                    int ButtonIDs[] = { ID_BUTTON_1, ID_BUTTON_2, ID_BUTTON_3 };
-                    for (int i = 0; i < 3; i++) {
-                        switch (btnActions[i]) {
-                        case 0: SetDlgItemText(hwnd, ButtonIDs[i], SScopedStr(SbieDll_FormatMessage0(MSG_6013)).c_str); break;
-                        case 1: SetDlgItemText(hwnd, ButtonIDs[i], SScopedStr(SbieDll_FormatMessage0(MSG_6012)).c_str); break;
-                        case 2: SetDlgItemText(hwnd, ButtonIDs[i], SScopedStr(SbieDll_FormatMessage0(MSG_6014)).c_str); break;
-                        }
-                    }
-
-                    if(timer_id)
-                        KillTimer(NULL, timer_id);
-                }
-            }
-            break;
-        }
-
-        //
         // handle buttons
         //
 
         case WM_COMMAND:
 
-            int Actions = 0;
-            if (LOWORD(wParam) == ID_BUTTON_1) {
-                Actions = btnActions[0];
-            } else if (LOWORD(wParam) == ID_BUTTON_2) {
-                Actions = btnActions[1];
-            } else if (LOWORD(wParam) == ID_BUTTON_3) {
-                Actions = btnActions[2];
-            } /*else if (LOWORD(wParam) == IDCANCEL) {
-
+            if (LOWORD(wParam) == ID_BUTTON_2)
                 EndDialog(hwnd, IDOK);
-
-            } */
-
-            if (Actions == 1)
-                EndDialog(hwnd, IDOK);
-            else if (Actions == 2)
-                ShellExecute(NULL , NULL, L"https://sandboxie-plus.com/go.php?to=sbie-get-cert", NULL, NULL, SW_SHOWNORMAL);
             else
                 EndDialog(hwnd, IDCANCEL);
 
@@ -277,18 +203,10 @@ bool DoAboutDialog(bool bReminder)
     INITCOMMONCONTROLSEX icc;
     INT_PTR r;
 
-    srand(GetTickCount());
-
-    g_bReminder = bReminder;
-
-    if (g_bReminder) {
-        return true;
-    }
-
     if (! initialized) {
 
         icc.dwSize = sizeof(INITCOMMONCONTROLSEX);
-        icc.dwICC = ICC_USEREX_CLASSES | ICC_TAB_CLASSES;
+        icc.dwICC = ICC_WIN95_CLASSES | ICC_TAB_CLASSES;
         InitCommonControlsEx(&icc);
 
         hProgramIcon = (HICON)LoadImage(

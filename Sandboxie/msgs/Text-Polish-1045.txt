@@ -1337,22 +1337,6 @@ Prze&ładuj konfigurację
 &Ukryj wszystkie wskazówki
 .
 
-3504;txt;01
-&Support Sandboxie with Donations
-.
-
-3505;txt;01
-Contribute to Sandboxie
-.
-
-3506;txt;01
-Get Supporter Certificate
-.
-
-3507;txt;01
-Apply Supporter Certificate
-.
-
 3451;txt;01
 P&omoc
 .
@@ -3652,10 +3636,6 @@ NetworkAccess=iexplorer.exe,Allow; Port=80,443; Address=192.168.0.1-192.168.100.
 If you prefer to use a UI to control these options, please upgrade to Sandboxie-Plus, which has full UI support for all new features.
 .
 
-6004;pop;err;01
-The configuration %3 of box %2 requires a supporter certificate. Processes in this box will be terminated after 5 minutes. For prolonged use, please consider supporting this project.
-.
-
 6005;txt;01
 Note: Without administrative privileges installers will fail to start in the sandbox. Sandboxie-Plus offers an option to make many installers succeed without those privileges. You can enable this option also in the classic build manually, by adding "FakeAdminRights=y" to the ini section for this box.
 .
@@ -3673,40 +3653,6 @@ If you would prefer to use a UI to control these options, please upgrade to Sand
 Sandboxie Plus offers enhanced privacy protection by switching the old behavior from a black-list mode, i.e., allowing read access to the entire drive, except blocked by Closed Path or Write Path, to a white-list mode where sandboxed programs are only allowed to read generic system locations and read access to most user data must be first explicitly granted.
 
 The legacy UI of Sandboxie classic does not implement support for this mode of operation. Although it can be configured using the ini file, it is recommended to use the modern Sandboxie-Plus UI (SandMan.exe) if you want to use privacy enhanced boxes.
-.
-
-6008;pop;err;01
-The configuration %3 of box %2 requires a supporter certificate and can not be used without it.
-.
-
-6009;pop;err;01
-The configuration %3 of box %2 requires an advanced supporter certificate.
-.
-
-6010;txt;01
-You have installed Sandboxie more than %2 days ago.
-
-So, you think David and the contributors are doing a great job?
-
-Why don't you show it by supporting the project and getting a Supporter Certificate?
-
-Sandboxie without a valid supporter certificate will now pause for a few seconds, to give you time to contemplate the possibility of supporting the project.
-.
-
-6011;txt;01
-Wait
-.
-
-6012;txt;01
-Continue
-.
-
-6013;txt;01
-Quit
-.
-
-6014;txt;01
-Get Certificate
 .
 
 #----------------------------------------------------------------------------
@@ -3977,30 +3923,6 @@ Domyślne ustawienia Sandboxie, zapewniają pełną ochronę, ale może będzies
 # 7987;txt;01
 # Klucz produktu został unieważniony, ponieważ zamówienie zostało zwrócone.
 # .
-
-7988;txt;01
-Your Supporter Certificate is valid, Thank You :-)
-.
-
-7989;txt;01
-The Supporter Certificate has expired :'(
-.
-
-7990;txt;01
-Please copy the entire Supporter Certificate into the clipboard and press OK.
-.
-
-7991;txt;01
-Failed to save certificate to file.
-.
-
-7992;txt;01
-The certificate is not valid.
-.
-
-7993;txt;01
-The certificate is valid and has been successfully applied.
-.
 
 
 #----------------------------------------------------------------------------

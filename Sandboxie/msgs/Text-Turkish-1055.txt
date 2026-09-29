@@ -1318,22 +1318,6 @@ Hızlı Kurtarma'dan Klasör &Kaldır
 Masaüstü Kısayolu Oluştur
 .
 
-3504;txt;01
-&Sandboxie'yi Bağışlarla Destekleyin
-.
-
-3505;txt;01
-Sandboxie'ye Katkıda Bulunun
-.
-
-3506;txt;01
-Destekçi Sertifikası Alın
-.
-
-3507;txt;01
-Destekçi Sertifikasını Uygula
-.
-
 #----------------------------------------------------------------------------
 # Sandboxie Control Ana Pencere
 #----------------------------------------------------------------------------
@@ -3279,10 +3263,6 @@ NetworkAccess=iexplorer.exe,Allow;Port=80,443;Address=192.168.0.1-192.168.100.25
 Eğer bu ayarları bir kullanıcı arayüzü üzerinden kontrol etmeyi tercih ederseniz, tüm yeni özellikler için tam kullanıcı arayüzü desteği sunan Sandboxie-Plus sürümüne geçebilirsiniz.
 .
 
-6004;pop;err;01
-%2 alanının %3 yapılandırması bir destekçi sertifikası gerektirir. Bu alandaki işlemler 5 dakika sonra sonlandırılacaktır. Uzun süreli kullanım için lütfen bu projeyi desteklemeyi düşünün.
-.
-
 6005;txt;01
 Not: Yönetici ayrıcalıkları olmadan yükleyiciler korumalı alanda başlatılamaz. Sandboxie-Plus, birçok yükleyicinin bu ayrıcalıklar olmadan başarılı olmasını sağlayan bir seçenek sunar. Bu seçeneği, bu alan için ini bölümüne "FakeAdminRights=y" elle ekleyerek klasik sürümde de etkinleştirebilirsiniz.
 .
@@ -3300,40 +3280,6 @@ Bu ayarları bir kullanıcı arayüzü üzerinden kontrol etmeyi tercih ederseni
 Sandboxie Plus, eski kara liste modundan (tüm sürücüye okuma erişimine izin verip, yalnızca "Closed Path" veya "Write Path" ile engellenenler hariç) beyaz liste moduna geçerek gizlilik korumasını artırır. Bu yeni modda, korumalı alandaki programlar yalnızca genel sistem konumlarını okuyabilirken, kullanıcı verilerine erişim için özel olarak izin verilmesi gerekir.
 
 Sandboxie'nin eski kullanıcı arayüzü bu çalışma modunu desteklemez. Bu mod, INI dosyası üzerinden yapılandırılabilse de, gizliliği artırılmış korumalı alanları kullanmak istiyorsanız, modern Sandboxie-Plus arayüzünü (SandMan.exe) kullanmanız önerilir.
-.
-
-6008;pop;err;01
-%2 alanının %3 yapılandırması bir destekçi sertifikası gerektirir ve bu sertifika olmadan kullanılamaz.
-.
-
-6009;pop;err;01
-%2 alanının %3 yapılandırması, gelişmiş bir destekçi sertifikası gerektiriyor.
-.
-
-6010;txt;01
-Sandboxie kurulalı %2 günden daha uzun bir süre olmuş.
-
-David ve katkıda bulunanların harika bir iş çıkardığını mı düşünüyorsun?
-
-Neden projeye destek vererek ve Destekçi Sertifikası alarak bunu göstermiyorsunuz?
-
-Geçerli bir destekçi sertifikası olmayan Sandboxie, şimdi birkaç saniye duraklayarak size projeyi desteklemeyi düşünmeniz için biraz zaman verecek.
-.
-
-6011;txt;01
-Bekle
-.
-
-6012;txt;01
-Devam et
-.
-
-6013;txt;01
-Çıkış
-.
-
-6014;txt;01
-Sertifika Al
 .
 
 #----------------------------------------------------------------------------
@@ -3419,59 +3365,6 @@ Sandboxie varsayılan ayarları tam koruma sağlar, ancak Sandboxie Kontrol prog
 #----------------------------------------------------------------------------
 # Lisans Yöneticisi
 #----------------------------------------------------------------------------
-
-7988;txt;01
-Destekçi Sertifikanız geçerlidir, teşekkürler. :-)
-.
-
-7989;txt;01
-Destekçi Sertifikanızın süresi dolmuş. :'(
-.
-
-7990;txt;01
-Lütfen Destekçi Sertifikanızın tamamını panoya kopyalayın ve Tamam'a tıklayın.
-.
-
-7991;txt;01
-Sertifika dosyaya kaydedilemedi.
-.
-
-7992;txt;01
-Sertifika geçerli değil.
-.
-
-7993;txt;01
-Sertifika geçerli ve başarıyla uygulandı.
-.
-
-7994;txt;01
-Mevcut bir destekçi sertifikanız olmadan bir Yükseltme Anahtarı özelliğini kullanmaya çalışıyorsunuz.
-Bu tür bir anahtar, önceden geçerli bir destekçi sertifikanızın olmasını gerektirir.
-Lütfen önce mevcut sertifikanızı girin, ardından yükseltme anahtarını uygulayın.
-.
-
-7995;txt;01
-Mevcut bir destekçi sertifikanız olmadan bir Yenileme Anahtarı kullanmaya çalışıyorsunuz.
-Bu tür bir anahtar, önceden geçerli bir destekçi sertifikanızın olmasını gerektirir.
-Lütfen önce mevcut sertifikanızı girin, ardından yenileme anahtarını uygulayın.
-.
-
-7996;txt;01
-Sertifika sunucudan alınamadı.
-%1
-.
-
-7997;txt;01
-Sunucuya bağlanılamadı. Lütfen internet bağlantınızı kontrol edin.
-.
-
-7998;txt;01
-Sunucudan boş yanıt alındı.
-.
-
-7999;txt;01
-Bilinmeyen sunucu hatası.
-.
 
 #----------------------------------------------------------------------------
 # SandboxieInstall

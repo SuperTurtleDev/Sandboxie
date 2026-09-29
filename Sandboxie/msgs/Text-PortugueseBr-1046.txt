@@ -1223,22 +1223,6 @@ Re&carregar configuração
 &Ocultar Todas as Dicas
 .
 
-3504;txt;01
-Apoie o &Sandboxie com doações
-.
-
-3505;txt;01
-Contribua para o Sandboxie
-.
-
-3506;txt;01
-Obter Certificado de Apoiador
-.
-
-3507;txt;01
-Aplicar Certificado de Apoiador
-.
-
 3451;txt;01
 A&juda
 .
@@ -3492,22 +3476,6 @@ Se preferir usar uma interface para controlar essas opções, atualize para o Sa
 ...
 
 Se preferir usar uma interface para controlar essas opções, atualize para o Sandboxie-Plus, que tem suporte completo de interface para todos os novos recursos.
-.
-
-6011;txt;01
-Aguarde
-.
-
-6012;txt;01
-Continuar
-.
-
-6013;txt;01
-Encerrar
-.
-
-6014;txt;01
-Obter certificado
 .
 
 #----------------------------------------------------------------------------

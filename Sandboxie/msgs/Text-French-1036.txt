@@ -1299,22 +1299,6 @@ Re&charger la configuration
 &Masquer toutes les astuces
 .
 
-3504;txt;01
-&Soutenir Sandboxie
-.
-
-3505;txt;01
-Contribuer à Sandboxie
-.
-
-3506;txt;01
-Obtenir un certificat d'adhérent
-.
-
-3507;txt;01
-Appliquer un certificat d'adhérent
-.
-
 3451;txt;01
 &Aide
 .
@@ -3616,10 +3600,6 @@ NetworkAccess=iexplorer.exe,Allow; Port=80,443; Address=192.168.0.1-192.168.100.
 Si vous préférez utiliser une interface utilisateur pour contrôler ces options, veuillez passer à Sandboxie-Plus, qui offre une prise en charge complète de toutes les nouvelles fonctionnalités.
 .
 
-6004;pop;err;01
-La configuration du bac sélectionné n'est pas autorisée.
-.
-
 6005;txt;01
 Note : sans privilèges d'administrateur, les installeurs ne pourront pas démarrer dans le bac à sable. Sandboxie-Plus offre une option pour que de nombreux installeurs réussissent sans ces privilèges. Vous pouvez également activer cette option manuellement dans la version classique, en ajoutant "FakeAdminRights=y" à la section ini du bac à sable.
 .
@@ -3637,40 +3617,6 @@ Si vous préférez utiliser une interface utilisateur pour contrôler ces option
 Sandboxie Plus renforce la confidentialité en passant d'un mode liste noire (accès en lecture à l'ensemble du disque sauf si une règle spécifique d’un dossier l’empêche) à un mode liste blanche (les programmes du bac à sable ne sont autorisés à lire que les emplacements génériques du système et l'accès en lecture à la plupart des données de l'utilisateur doit être explicitement accordé).
 
 L'interface utilisateur de Sandboxie Classic ne prend pas en charge ce mode de fonctionnement. Bien qu'il soit possible de le configurer à l'aide du fichier ini, il est recommandé d'utiliser l'interface moderne Sandboxie-Plus (SandMan.exe) si vous souhaitez utiliser des bacs à sable à confidentialité renforcée.
-.
-
-6008;pop;err;01
-La configuration %3 du bac à sable %2 requiert un certificat d'adhérent et ne peut être utilisé sans.
-.
-
-6009;pop;err;01
-La configuration %3 du bac à sable %2 requiert un certificat d'adhérent avancé.
-.
-
-6010;txt;01
-Sandboxie est installé depuis plus de %2 jours.
-
-Pensez-vous que David et les contributeurs ont fait du bon boulot ?
-
-Pourquoi ne pas le leur montrer en soutenant le projet avec un certificat d'adhérent ?
-
-Sans ce certificat, Sandboxie va se mettre en pause quelques secondes afin de vous laisser le temps de songer à la possibilité de soutenir le projet.
-.
-
-6011;txt;01
-Attendre
-.
-
-6012;txt;01
-Poursuivre
-.
-
-6013;txt;01
-Quitter
-.
-
-6014;txt;01
-Obtenir un certificat
 .
 
 #----------------------------------------------------------------------------
@@ -3941,30 +3887,6 @@ La configuration par défaut dans Sandboxie fournit une protection complète, ma
 # 7987;txt;01
 # Clé de produit annulée car la commande a été remboursée.
 # .
-
-7988;txt;01
-Votre certificat d'adhérent est valide, merci :-)
-.
-
-7989;txt;01
-Votre certificat d'adhérent a expiré :'(
-.
-
-7990;txt;01
-Copiez l'entièreté du certificat d'adhérent dans le presse-papier et cliquez sur OK.
-.
-
-7991;txt;01
-Échec de l'enregistrement du certificat dans le fichier.
-.
-
-7992;txt;01
-Le certificat n'est pas valide.
-.
-
-7993;txt;01
-Le certificat est valide et a été appliqué avec succès.
-.
 
 #----------------------------------------------------------------------------
 # SandboxieInstall

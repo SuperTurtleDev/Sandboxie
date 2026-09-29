@@ -1440,22 +1440,6 @@ Last &om oppsett
 Sk&jul alle tips
 .
 
-3504;txt;01
-&Støtte Sandboxie med donasjoner
-.
-
-3505;txt;01
-Bidrag til Sandboxie
-.
-
-3506;txt;01
-Få kundesertifikat
-.
-
-3507;txt;01
-Bruk støttesertifikat
-.
-
 3451;txt;01
 &Hjelp
 .
@@ -3772,10 +3756,6 @@ NetworkAccess=iexplorer.exe,Allow; Port=80,443; Address=192.168.0.1-192.168.100.
 Hvis du foretrekker å bruke en UI til å styre disse alternativene, vennligst oppgrader til Sandboxie-Plus, som har full UI-støtte for alle nye funksjoner.
 .
 
-6004;pop;err;01
-Konfigurasjonen %3 av boks %2 krever et støttesertifikat. Prosessene i denne boksen vil bli avsluttet etter 5 minutter. For langvarig bruk må du vurdere å støtte dette prosjektet.
-.
-
 6005;txt;01
 Merk: Uten administrative privilegier vil installatører ikke starte i sandkassen. Sandboxie-Plus tilbyr et alternativ for å gjøre mange installatører lykkes uten disse privilegier. Du kan aktivere dette alternativet også i den klassiske bygge manuelt, ved å legge til "FakeAdminRights=y" til ini-delen for denne boksen.
 .
@@ -3794,40 +3774,6 @@ Sandboxie Plus tilbyr forbedret personvern ved å endre den gamle oppførselen f
 
 Den gamle brukergrensesnittet i Sandboxie Classic støtter ikke denne driftsmåten. Selv om det kan konfigureres via ini-filen, anbefales det å bruke det moderne Sandboxie-Plus-grensesnittet (SandMan.exe) hvis du vil bruke personvernforbedrede bokser.
 
-.
-
-6008;pop;err;01
-Konfigurasjonen %3 av boks %2 krever et støttesertifikat og kan ikke brukes uten det.
-.
-
-6009;pop;err;01
-Konfigurasjonen %3 av boks %2 krever et avansert støttesertifikat.
-.
-
-6010;txt;01
-Du har hatt Sandboxie installert i over %2 dager.
-
-Synes du David og bidragsyterne gjør en god jobb?
-
-Vurder å støtte prosjektet ved å skaffe et Supporter-sertifikat.
-
-Uten et gyldig supporter-sertifikat vil Sandboxie nå ta en kort pause, slik at du kan vurdere om du vil støtte prosjektet.
-.
-
-6011;txt;01
-Vent
-.
-
-6012;txt;01
-Fortsett
-.
-
-6013;txt;01
-Avslutt
-.
-
-6014;txt;01
-Hent sertifikat
 .
 
 #----------------------------------------------------------------------------
@@ -4098,30 +4044,6 @@ Standardinnstillingene i Sandboxie gir full beskyttelse, men du kan se på innst
 # 7987;txt;01
 # Product Key was cancelled because the order was refunded.
 # .
-
-7988;txt;01
-Ditt støttekort er gyldig, takk :-)
-.
-
-7989;txt;01
-Kundesertifikatet er utløpt :'(
-.
-
-7990;txt;01
-Kopier hele Kundesertifikatet til utklippstavlen og trykk OK.
-.
-
-7991;txt;01
-Klarte ikke å lagre sertifikat til fil.
-.
-
-7992;txt;01
-Sertifikatet er ikke gyldig.
-.
-
-7993;txt;01
-Sertifikatet er gyldig og har blitt anvendt.
-.
 
 #----------------------------------------------------------------------------
 # SandboxieInstall

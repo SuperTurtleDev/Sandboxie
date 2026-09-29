@@ -1174,22 +1174,6 @@ Alle Tipp&s anzeigen
 &Alle Tipps verbergen
 .
 
-3504;txt;01
-&Unterstütze Sandboxie
-.
-
-3505;txt;01
-Zu Sandboxie beitragen
-.
-
-3506;txt;01
-Unterstützerzertifikat holen
-.
-
-3507;txt;01
-Unterstützerzertifikat verwenden
-.
-
 3451;txt;01
 &Hilfe
 .
@@ -3278,10 +3262,6 @@ NetworkAccess=iexplorer.exe,Allow; Port=80,443; Address=192.168.0.1-192.168.100.
 Falls Sie bevorzugen diese Optionen in einer UI zu kontrollieren, upgraden Sie bitte zu Sandboxie-Plus, welches volle UI-Unterstützung für alle neuen Funktionen hat.
 .
 
-6004;pop;err;01
-Die Konfiguration %3 von Box %2 erfordert ein Unterstützerzertifikat. Prozesse in dieser Box werden nach 5 Minuten beendet. Für weitergehende Nutzung, erwägen Sie bitte die Unterstützung des Projektes.
-.
-
 6005;txt;01
 Hinweis: Ohne administrative Privilegien werden Installer in der Sandbox nicht starten können. Sandboxie-Plus bietet eine Option um viele dieser Installer erfolgreich auszuführen, ohne diese Privilegien. Sie können diese Option auch in der klassischen Variante manuell aktivieren, durch hinzufügen von "FakeAdminRights=y" in der ini-Sektion für diese Box.
 .
@@ -3299,40 +3279,6 @@ Falls Sie bevorzugen diese Optionen in einer UI zu kontrollieren, upgraden Sie b
 Sandboxie-Plus bietet verbesserten Privatsphärenschutz durch den Wechsel vom alten Verhalten eines Sperrlisten-Modus, z.B. dem Erlauben des Lesezugriffs auf das gesamte Laufwerk, ausschließlich blockierter Zugriffe durch Closed Path oder Write Path, zu einem Erlaubnislisten-Modus bei dem sandgeboxte Programme nur erlaubt wird auf generische Systemorte lesend zu zu greifen und Lesezugriff auf die meisten Nutzerdaten erst explizit gewährt werden muss.
 
 Die veraltete UI von Sandboxie Classic implementiert keine Unterstützung für diesen Betriebsmodus. Obwohl er durch die ini konfiguriert werden kann, ist es ratsam die moderne Sandboxie-Plus UI (SandMan.exe) zu verwenden, falls Sie die verbesserten Privatsphärenboxen nutzen möchten.
-.
-
-6008;pop;err;01
-Die Konfiguration %3 der Box %2 erfordert ein Unterstützerzertifikat und kann nicht ohne genutzt werden.
-.
-
-6009;pop;err;01
-Die Konfiguration %3 der Box %2 erfordert ein erweitertes Unterstützerzertifikat.
-.
-
-6010;txt;01
-Sie haben Sandboxie seit mehr als %2 Tagen installiert.
-
-Nun, denken Sie David und die Beitragenden machen einen guten Job?
-
-Warum zeigen Sie es nicht, in dem Sie das Projekt unterstützen und ein Unterstützerzertifikat holen?
-
-Sandboxie wird nun ohne gültiges Unterstützerzertifikat für ein paar Sekunden pausieren, um Ihnen Zeit zu geben die Möglichkeit zu erwägen, das Projekt zu unterstützen.
-.
-
-6011;txt;01
-Warten
-.
-
-6012;txt;01
-Weiter
-.
-
-6013;txt;01
-Beenden
-.
-
-6014;txt;01
-Zertifikat holen
 .
 
 #----------------------------------------------------------------------------
@@ -3418,59 +3364,6 @@ Die Standardeinstellungen von Sandboxie bieten vollständigen Schutz. Die Sandbo
 #----------------------------------------------------------------------------
 # License Manager
 #----------------------------------------------------------------------------
-
-7988;txt;01
-Ihr Unterstützerzertifikat ist gültig, Vielen Dank :-)
-.
-
-7989;txt;01
-Das Unterstützerzertifikat ist abgelaufen :'(
-.
-
-7990;txt;01
-Bitte kopieren Sie das vollständige Unterstützerzertifikat in die Zwischenablage und drücken Sie OK.
-.
-
-7991;txt;01
-Konnte das Zertifikat nicht in einer Datei speichern.
-.
-
-7992;txt;01
-Das Zertifikat ist nicht gültig.
-.
-
-7993;txt;01
-Das Zertifikat ist gültig und wurde erfolgreich übernommen.
-.
-
-7994;txt;01
-Sie versuchen einen Funktions-Upgrade-Schlüssel zu verwenden, ohne über ein bestehendes Unterstützerzertifikat zu verfügen.
-Diese Art von Schlüssel erfordert, dass Sie über ein bereits bestehendes gültiges Unterstützerzertifikat verfügen.
-Bitte geben Sie zuerst Ihr aktuelles Zertifikat ein und wenden Sie dann den Upgrade-Schlüssel an.
-.
-
-7995;txt;01
-Sie versuchen einen Erneuerungsschlüssel zu verwenden, ohne über ein bestehendes Unterstützerzertifikat zu verfügen.
-Diese Art von Schlüssel erfordert, dass Sie über ein bereits bestehendes gültiges Unterstützerzertifikat verfügen.
-Bitte geben Sie zuerst Ihr aktuelles Zertifikat ein und wenden Sie dann den Erneuerungsschlüssel an.
-.
-
-7996;txt;01
-Abrufen des Zertifikats vom Server fehlgeschlagen.
-%1
-.
-
-7997;txt;01
-Verbindung zum Server fehlgeschlagen. Bitte überprüfen Sie Ihre Internetverbindung.
-.
-
-7998;txt;01
-Leere Antwort vom Server.
-.
-
-7999;txt;01
-Unbekannter Serverfehler.
-.
 
 #----------------------------------------------------------------------------
 # SandboxieInstall
