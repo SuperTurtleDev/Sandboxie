@@ -138,12 +138,9 @@ BEGIN_MESSAGE_MAP(CMyFrame, CFrameWnd)
     ON_COMMAND(ID_CONF_EDIT,                    OnCmdConfEdit)
     ON_COMMAND(ID_CONF_RELOAD,                  OnCmdConfReload)
 
-    ON_COMMAND(ID_HELP_SUPPORT,                 OnCmdHelpSupport)
-    ON_COMMAND(ID_HELP_CONTRIBUTION,            OnCmdHelpContribution)
     ON_COMMAND(ID_HELP_TOPICS,                  OnCmdHelpTopics)
     ON_COMMAND(ID_HELP_TUTORIAL,                OnCmdHelpTutorial)
     ON_COMMAND(ID_HELP_FORUM,                   OnCmdHelpForum)
-    ON_COMMAND(ID_HELP_UPGRADE,                 OnCmdHelpUpgrade)
     ON_COMMAND(ID_HELP_WHATSNEW,                OnCmdHelpWhatsNew)
     ON_COMMAND(ID_HELP_MIGRATION,               OnCmdHelpMigrate)
     ON_COMMAND(ID_HELP_ABOUT,                   OnCmdHelpAbout)
@@ -986,28 +983,6 @@ void CMyFrame::OnCmdConfReload()
 
 
 //---------------------------------------------------------------------------
-// OnCmdHelpSupport
-//---------------------------------------------------------------------------
-
-
-void CMyFrame::OnCmdHelpSupport()
-{
-	CRunBrowser x(this, L"https://sandboxie-plus.com/go.php?to=donate");
-}
-
-
-//---------------------------------------------------------------------------
-// OnCmdHelpContribution
-//---------------------------------------------------------------------------
-
-
-void CMyFrame::OnCmdHelpContribution()
-{
-	CRunBrowser x(this, L"https://sandboxie-plus.com/go.php?to=sbie-contribute");
-}
-
-
-//---------------------------------------------------------------------------
 // OnCmdHelpTopics
 //---------------------------------------------------------------------------
 
@@ -1041,17 +1016,6 @@ void CMyFrame::OnCmdHelpForum()
 {
     CRunBrowser x(this, L"https://sandboxie-plus.com/go.php?to=sbie-forum");
 }
-
-//---------------------------------------------------------------------------
-// OnCmdHelpUpgrade
-//---------------------------------------------------------------------------
-
-
-void CMyFrame::OnCmdHelpUpgrade()
-{
-	CRunBrowser x(this, L"https://sandboxie-plus.com/go.php?to=sbie-plus&tip=upgrade");
-}
-
 
 //---------------------------------------------------------------------------
 // OnCmdHelpWhatsNew

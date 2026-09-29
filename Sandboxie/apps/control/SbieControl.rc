@@ -123,20 +123,14 @@ BEGIN
     END
     POPUP "3451"
     BEGIN
-        MENUITEM "3504",                        ID_HELP_SUPPORT
-        MENUITEM "3505",                        ID_HELP_CONTRIBUTION
-        MENUITEM SEPARATOR
         MENUITEM "3452",                        ID_HELP_TOPICS
         MENUITEM "3453",                        ID_HELP_TUTORIAL
         MENUITEM "3469",                        ID_HELP_WHATSNEW
         //MENUITEM "3468",                        ID_HELP_MIGRATION
         MENUITEM "3457",                        ID_HELP_FORUM
         MENUITEM SEPARATOR
-        MENUITEM "3467",                        ID_HELP_UPGRADE
-        MENUITEM SEPARATOR
         MENUITEM "3456",                        ID_HELP_ABOUT
     END
-    MENUITEM "3467",                        ID_HELP_UPGRADE
 END
 
 SANDBOX_MENU MENU
