@@ -62,6 +62,14 @@ struct _BOX {
 
     CONF_EXPAND_ARGS *expand_args;
 
+    // (approved optimization #2) flattened ProcessGroup cache for this
+    // box:  FLAT_GROUP nodes, each carrying a group name and its
+    // recursively-expanded, comma-separated member list.  Filled
+    // lazily by Process_GetFlatGroup; a zeroed list means "empty".
+    // Nodes live in the box expand_args pool.
+
+    LIST flat_groups;
+
     // a sandbox has four paths:
     // 1.  the file system entry point into the sandbox
     // default:  \??\C:\Sandbox\%SID%\BoxName

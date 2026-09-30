@@ -42,7 +42,7 @@ static BOOLEAN Process_MatchImageGroup(
     ULONG depth);
 
 static BOOLEAN Process_AddPath_2(
-    PROCESS *proc, LIST *list, const WCHAR *value, const WCHAR *setting_name,
+    PROCESS *proc, PATH_SET *list, const WCHAR *value, const WCHAR *setting_name,
     BOOLEAN AddFirst, BOOLEAN AddStar,
     BOOLEAN RemoveBackslashes, BOOLEAN CheckReparse, BOOLEAN* Reparsed, ULONG Level);
 
@@ -146,6 +146,190 @@ _FX BOOLEAN Process_IsStarter(
 #endif
 
 //---------------------------------------------------------------------------
+// PATH_SET helpers (approved optimization #1: first-segment bucketing)
+//---------------------------------------------------------------------------
+
+
+_FX void Process_PathSetInit(PATH_SET *set)
+{
+    List_Init(&set->wild_patterns);
+    List_Init(&set->buckets);
+}
+
+
+_FX void Process_PathSetFirstSeg(
+    const WCHAR *path, ULONG path_len,
+    WCHAR *seg, ULONG *seg_len)
+{
+    //
+    // first segment = everything before the first backslash, with
+    // leading backslashes skipped.  "\Device\HarddiskVolume3\X" gives
+    // "device";  "a:\x" gives "a:";  a path with no backslash gives
+    // the whole string.  Capped at PATH_SET_SEG_MAX so build and
+    // query sides always agree on long segments.
+    //
+
+    ULONG i = 0, n = 0;
+
+    while (i < path_len && path[i] == L'\\')
+        ++i;
+
+    for (; i < path_len && path[i] != L'\\' && n < PATH_SET_SEG_MAX; ++i)
+        seg[n++] = path[i];
+
+    seg[n] = L'\0';
+    *seg_len = n;
+
+    for (i = 0; i < n; ++i) {
+        WCHAR c = seg[i];
+        if (c >= L'A' && c <= L'Z')
+            seg[i] = c - L'A' + L'a';
+    }
+}
+
+
+_FX BOOLEAN Process_PathSetAdd(
+    POOL *pool, PATH_SET *set, PATTERN *pat, BOOLEAN AddFirst)
+{
+    const WCHAR *src = Pattern_Source(pat);
+    WCHAR seg[PATH_SET_SEG_MAX + 1];
+    ULONG seg_len;
+    ULONG i;
+    BOOLEAN wild = FALSE;
+    PATH_BUCKET *bucket;
+
+    Process_PathSetFirstSeg(src, wcslen(src), seg, &seg_len);
+
+    for (i = 0; i < seg_len; ++i) {
+        if (seg[i] == L'*' || seg[i] == L'?') {
+            wild = TRUE;
+            break;
+        }
+    }
+
+    if (wild) {
+        if (AddFirst)
+            List_Insert_Before(&set->wild_patterns, NULL, pat);
+        else
+            List_Insert_After(&set->wild_patterns, NULL, pat);
+        return TRUE;
+    }
+
+    bucket = Process_PathSetFindBucket(set, seg, seg_len);
+    if (! bucket) {
+
+        bucket = Mem_Alloc(pool, sizeof(PATH_BUCKET));
+        if (! bucket)
+            return FALSE;
+
+        memzero(bucket, sizeof(PATH_BUCKET));
+        wcscpy(bucket->first, seg);
+        List_Init(&bucket->patterns);
+
+        List_Insert_After(&set->buckets, NULL, bucket);
+    }
+
+    if (AddFirst)
+        List_Insert_Before(&bucket->patterns, NULL, pat);
+    else
+        List_Insert_After(&bucket->patterns, NULL, pat);
+
+    return TRUE;
+}
+
+
+_FX PATH_BUCKET *Process_PathSetFindBucket(
+    PATH_SET *set, const WCHAR *seg, ULONG seg_len)
+{
+    PATH_BUCKET *bucket = List_Head(&set->buckets);
+    while (bucket) {
+        if (_wcsicmp(bucket->first, seg) == 0)
+            return bucket;
+        bucket = List_Next(bucket);
+    }
+    return NULL;
+}
+
+
+_FX PATTERN *Process_PathSetPop(PATH_SET *set)
+{
+    //
+    // unlink and return the first pattern of the set (wild bucket
+    // first, then each bucket in order).  Used by the ClosedXxx
+    // discard pass, which moves survivors into the live set.
+    //
+
+    PATH_BUCKET *bucket;
+    PATTERN *pat;
+
+    pat = List_Head(&set->wild_patterns);
+    if (pat) {
+        List_Remove(&set->wild_patterns, pat);
+        return pat;
+    }
+
+    bucket = List_Head(&set->buckets);
+    while (bucket) {
+
+        pat = List_Head(&bucket->patterns);
+        if (pat) {
+            List_Remove(&bucket->patterns, pat);
+            return pat;
+        }
+
+        bucket = List_Next(bucket);
+    }
+
+    return NULL;
+}
+
+
+_FX void Process_PathSetPurge(PATH_SET *set)
+{
+    //
+    // free every pattern in the set and the buckets themselves.
+    // the patterns (and buckets) live in the process pool, which is
+    // freed wholesale at process teardown -- this purge is for the
+    // path-list refresh API, so the pool is still alive; pattern
+    // nodes carry their own allocation and are freed via Pattern_Free
+    // while the bucket shells are only freed when empty (bucket
+    // nodes are small, keeping them would also be fine).
+    //
+
+    PATH_BUCKET *bucket;
+    PATTERN *pat;
+
+    while (1) {
+        pat = List_Head(&set->wild_patterns);
+        if (! pat)
+            break;
+        List_Remove(&set->wild_patterns, pat);
+        Pattern_Free(pat);
+    }
+
+    while (1) {
+
+        bucket = List_Head(&set->buckets);
+        if (! bucket)
+            break;
+
+        while (1) {
+            pat = List_Head(&bucket->patterns);
+            if (! pat)
+                break;
+            List_Remove(&bucket->patterns, pat);
+            Pattern_Free(pat);
+        }
+
+        List_Remove(&set->buckets, bucket);
+        Mem_Free(bucket, sizeof(PATH_BUCKET));
+    }
+
+    Process_PathSetInit(set);
+}
+
+
+//---------------------------------------------------------------------------
 // Process_MatchImage
 //---------------------------------------------------------------------------
 
@@ -240,27 +424,65 @@ _FX BOOLEAN Process_MatchImage(
 //---------------------------------------------------------------------------
 
 
-_FX BOOLEAN Process_MatchImageGroup(
-    BOX *box, const WCHAR *group, ULONG group_len, const WCHAR *test_str,
-    ULONG depth)
-{
-    ULONG index;
-    BOOLEAN match = FALSE;
+//---------------------------------------------------------------------------
+// Process_GetFlatGroup  (approved optimization #2)
+//---------------------------------------------------------------------------
+//
+// Return the flattened member list of a ProcessGroup:  a pointer to a
+// comma-separated, recursively-expanded member string, cached on the
+// BOX.  The first lookup walks the ProcessGroup settings once (and
+// recurses into nested groups, depth-capped like the classic code);
+// every later lookup is one list walk over the tiny cache.
+//
+// The returned string is allocated from the box expand_args pool and
+// stays valid for the lifetime of the BOX.  NULL means "not found".
+//
 
-    if (! group_len)
-        group_len = wcslen(group);
+
+typedef struct _FLAT_GROUP {
+
+    LIST_ELEM list_elem;
+
+    WCHAR *name;                        // group name, without <>
+    WCHAR *members;                     // flattened, comma separated
+
+} FLAT_GROUP;
+
+
+_FX const WCHAR *Process_GetFlatGroup(
+    BOX *box, const WCHAR *group, ULONG group_len, ULONG depth)
+{
+    static const WCHAR *ProcessGroupSetting = L"ProcessGroup";
+
+    FLAT_GROUP *node;
+    const WCHAR *flat = NULL;
+    WCHAR *build = NULL;
+    ULONG build_len = 0;
+    ULONG index;
+    POOL *pool;
+
+    //
+    // cache lookup
+    //
+
+    node = List_Head(&box->flat_groups);
+    while (node) {
+        if (_wcsicmp(node->name, group) == 0)
+            return node->members;
+        node = List_Next(node);
+    }
+
+    //
+    // walk every ProcessGroup setting; concatenate the member lists
+    // of the (possibly several) definitions of this group
+    //
 
     Conf_AdjustUseCount(TRUE);
 
-    for (index = 0; (! match); ++index) {
-
-        //
-        // get next process group setting, compare to passed group name.
-        // if the setting is <passed_group_name>= then we accept it.
-        //
+    for (index = 0; ; ++index) {
 
         ULONG value_len;
-        const WCHAR *value = Conf_Get(box->name, L"ProcessGroup", index);
+        const WCHAR *value = Conf_Get(box->name, ProcessGroupSetting, index);
         if (! value)
             break;
 
@@ -276,28 +498,177 @@ _FX BOOLEAN Process_MatchImageGroup(
         ++value;
 
         //
-        // value now points at the comma-separated
-        // list of processes in this process group
+        // append this definition's members, expanding nested groups
         //
 
         while (*value) {
+
+            WCHAR *ptr = wcschr(value, L',');
+            ULONG member_len = ptr
+                ? (ULONG)(ULONG_PTR)(ptr - value) : wcslen(value);
+
+            if (member_len) {
+
+                if (value[0] == L'<' && depth < 6) {
+
+                    //
+                    // nested group:  flatten it into this list.  the
+                    // child result is NOT cached under its own name
+                    // (the cache would need transitive invalidation);
+                    // each distinct root group expansion walks the
+                    // settings once, which is still the promised
+                    // one-time flattening per group per box
+                    //
+
+                    WCHAR child[BOXNAME_COUNT + 4];
+                    const WCHAR *child_flat;
+                    ULONG child_len = member_len - 2;
+
+                    if (child_len && child_len < BOXNAME_COUNT) {
+
+                        wmemcpy(child, value + 1, child_len);
+                        child[child_len] = L'\0';
+
+                        child_flat = Process_GetFlatGroup(
+                                        box, child, child_len, depth + 1);
+                        if (child_flat && *child_flat) {
+
+                            ULONG add_len = wcslen(child_flat);
+                            WCHAR *nb = Mem_Alloc(
+                                box->expand_args->pool,
+                                (build_len + add_len + 4) * sizeof(WCHAR));
+                            if (nb) {
+                                if (build_len)
+                                    wmemcpy(nb, build, build_len);
+                                if (build_len && nb[build_len - 1] != L',')
+                                    nb[build_len++] = L',';
+                                wmemcpy(nb + build_len, child_flat, add_len);
+                                build_len += add_len;
+                                nb[build_len] = L'\0';
+                                if (build)
+                                    Mem_Free(build,
+                                        (wcslen(build) + 1) * sizeof(WCHAR));
+                                build = nb;
+                            }
+                        }
+                    }
+
+                } else {
+
+                    ULONG add_len = member_len;
+                    WCHAR *nb = Mem_Alloc(
+                        box->expand_args->pool,
+                        (build_len + add_len + 4) * sizeof(WCHAR));
+                    if (nb) {
+                        if (build_len)
+                            wmemcpy(nb, build, build_len);
+                        if (build_len && nb[build_len - 1] != L',')
+                            nb[build_len++] = L',';
+                        wmemcpy(nb + build_len, value, add_len);
+                        build_len += add_len;
+                        nb[build_len] = L'\0';
+                        if (build)
+                            Mem_Free(build,
+                                (wcslen(build) + 1) * sizeof(WCHAR));
+                        build = nb;
+                    }
+                }
+            }
+
+            value += member_len;
+            while (*value == L',')
+                ++value;
+        }
+    }
+
+    Conf_AdjustUseCount(FALSE);
+
+    //
+    // cache the flattened list (an empty result caches as an empty
+    // string so a missing group is not re-walked either)
+    //
+
+    pool = box->expand_args->pool;
+
+    node = Mem_Alloc(pool, sizeof(FLAT_GROUP));
+    if (! node) {
+        if (build)
+            Mem_Free(build, (wcslen(build) + 1) * sizeof(WCHAR));
+        return flat;
+    }
+
+    node->name = Mem_Alloc(pool, (group_len + 1) * sizeof(WCHAR));
+    node->members = Mem_Alloc(pool, (build_len + 1) * sizeof(WCHAR));
+
+    if (node->name && node->members) {
+
+        wmemcpy(node->name, group, group_len);
+        node->name[group_len] = L'\0';
+
+        if (build_len)
+            wmemcpy(node->members, build, build_len + 1);
+        else
+            node->members[0] = L'\0';
+
+        List_Insert_After(&box->flat_groups, NULL, node);
+
+        flat = node->members;
+
+    } else {
+
+        if (node->name)
+            Mem_Free(node->name, (group_len + 1) * sizeof(WCHAR));
+        if (node->members)
+            Mem_Free(node->members, (build_len + 1) * sizeof(WCHAR));
+        Mem_Free(node, sizeof(FLAT_GROUP));
+    }
+
+    if (build)
+        Mem_Free(build, (wcslen(build) + 1) * sizeof(WCHAR));
+
+    return flat;
+}
+
+
+//---------------------------------------------------------------------------
+// Process_MatchImageGroup
+//---------------------------------------------------------------------------
+
+
+_FX BOOLEAN Process_MatchImageGroup(
+    BOX *box, const WCHAR *group, ULONG group_len, const WCHAR *test_str,
+    ULONG depth)
+{
+    BOOLEAN match = FALSE;
+    const WCHAR *flat;
+    const WCHAR *value;
+
+    if (! group_len)
+        group_len = wcslen(group);
+
+    Conf_AdjustUseCount(TRUE);
+
+    //
+    // (optimization #2) one flattened, cached member list instead of
+    // the per-call recursive settings walk
+    //
+
+    flat = Process_GetFlatGroup(box, group, group_len, depth);
+    if (flat && *flat) {
+
+        value = flat;
+        while (*value && (! match)) {
+
+            ULONG value_len;
             WCHAR *ptr = wcschr(value, L',');
             if (ptr)
                 value_len = (ULONG)(ULONG_PTR)(ptr - value);
             else
                 value_len = wcslen(value);
 
-            if (value_len) {
-                if (*value != L'<') {
-                    match = Process_MatchImage(
+            if (value_len)
+                match = Process_MatchImage(
                             box, value, value_len, test_str, depth + 1);
-                } else if (depth < 6) {
-                    match = Process_MatchImageGroup(
-                            box, value, value_len, test_str, depth + 1);
-                }
-                if (match)
-                    break;
-            }
 
             value += value_len;
             while (*value == L',')
@@ -549,7 +920,7 @@ _FX BOOLEAN Process_GetConf_Bit(PROCESS *proc, UINT64 bit, BOOLEAN def)
 
 
 _FX BOOLEAN Process_GetPaths(
-    PROCESS *proc, LIST *list, const WCHAR *section_name, const WCHAR *setting_name, BOOLEAN AddStar)
+    PROCESS *proc, PATH_SET *list, const WCHAR *section_name, const WCHAR *setting_name, BOOLEAN AddStar)
 {
     ULONG index;
     const WCHAR *value;
@@ -613,7 +984,7 @@ _FX BOOLEAN Process_GetPaths(
 
             // don't close paths for sbie components
             if (closed_ipc && proc->image_sbie)
-                continue; 
+                continue;
 
             // for all other advance to the path and apply the block for all sandboxed images
             if (proc->image_from_box && proc->always_close_for_boxed) {
@@ -662,7 +1033,7 @@ _FX BOOLEAN Process_GetPaths2(
     // any other settings, including WriteXxxPath settings
     //
 
-    List_Init(&dummy_list);
+    Process_PathSetInit(&dummy_list);
     if (! Process_GetPaths(proc, &dummy_list, setting_name, AddStar))
         return FALSE;
 
@@ -708,7 +1079,7 @@ _FX BOOLEAN Process_GetPaths2(
 
 
 #ifdef USE_TEMPLATE_PATHS
-BOOLEAN Process_GetTemplatePaths(PROCESS *proc, LIST *list, const WCHAR *setting_name)
+BOOLEAN Process_GetTemplatePaths(PROCESS *proc, PATH_SET *list, const WCHAR *setting_name)
 {
     BOOLEAN ok;
 
@@ -736,7 +1107,7 @@ BOOLEAN Process_GetTemplatePaths(PROCESS *proc, LIST *list, const WCHAR *setting
 
 
 _FX BOOLEAN Process_AddPath(
-    PROCESS *proc, LIST *list, const WCHAR *setting_name,
+    PROCESS *proc, PATH_SET *list, const WCHAR *setting_name,
     BOOLEAN AddFirst, const WCHAR *value, BOOLEAN AddStar)
 {
     WCHAR *tmp;
@@ -851,7 +1222,7 @@ _FX BOOLEAN Process_AddPath(
 
 
 _FX BOOLEAN Process_AddPath_2(
-    PROCESS *proc, LIST *list, const WCHAR *value, const WCHAR *setting_name,
+    PROCESS *proc, PATH_SET *list, const WCHAR *value, const WCHAR *setting_name,
     BOOLEAN AddFirst, BOOLEAN AddStar,
     BOOLEAN RemoveBackslashes, BOOLEAN CheckReparse, BOOLEAN* Reparsed, ULONG Level)
 {
@@ -936,10 +1307,15 @@ _FX BOOLEAN Process_AddPath_2(
     pat = Pattern_Create(proc->pool, tmp, TRUE, Level);
     if (pat) {
 
-        if (AddFirst)
-            List_Insert_Before(list, NULL, pat);
-        else
-            List_Insert_After(list, NULL, pat);
+        //
+        // bucket the pattern by its first path segment (approved
+        // optimization #1); the flat single list is gone
+        //
+
+        if (! Process_PathSetAdd(proc->pool, list, pat, AddFirst)) {
+            Pattern_Free(pat);
+            pat = NULL;
+        }
     }
 
     Mem_FreeString(tmp);
@@ -959,13 +1335,15 @@ _FX BOOLEAN Process_AddPath_2(
 
 _FX const WCHAR *Process_MatchPath(
     POOL *pool, const WCHAR *path, ULONG path_len,
-    LIST *open_list, LIST *closed_list,
+    PATH_SET *open_list, PATH_SET *closed_list,
     BOOLEAN *is_open, BOOLEAN *is_closed)
 {
     PATTERN *pat;
     WCHAR *path_lwr;
     ULONG path_lwr_len;
     const WCHAR *patsrc = NULL;
+    WCHAR seg[PATH_SET_SEG_MAX + 1];
+    ULONG seg_len;
 
     *is_open = FALSE;
     *is_closed = FALSE;
@@ -975,6 +1353,9 @@ _FX const WCHAR *Process_MatchPath(
     // a backslash character, we will check it twice, second time with
     // a suffixing backslash.  this will make sure we match C:\X even
     // even when {Open,Closed}XxxPath=C:\X\ (with a backslash suffix)
+    //
+    // (optimization #1) each PATH_SET is walked as wildcard bucket +
+    // the one bucket selected by the query's first path segment
     //
 
     path_lwr_len = (path_len + 4) * sizeof(WCHAR);
@@ -993,13 +1374,17 @@ _FX const WCHAR *Process_MatchPath(
     path_lwr[path_len + 1] = L'\0';
     _wcslwr(path_lwr);
 
+    Process_PathSetFirstSeg(path_lwr, path_len, seg, &seg_len);
+
     if (closed_list) {
 
-        pat = List_Head(closed_list);
+        PATH_BUCKET *bucket =
+            Process_PathSetFindBucket(closed_list, seg, seg_len);
+
+        pat = List_Head(&closed_list->wild_patterns);
         while (pat) {
 
             if (Pattern_Match(pat, path_lwr, path_len)) {
-
                 *is_closed = TRUE;
                 patsrc = Pattern_Source(pat);
                 break;
@@ -1008,7 +1393,6 @@ _FX const WCHAR *Process_MatchPath(
             if (path_lwr[path_len - 1] != L'\\') {
                 path_lwr[path_len] = L'\\';
                 if (Pattern_Match(pat, path_lwr, path_len + 1)) {
-
                     path_lwr[path_len] = L'\0';
                     *is_closed = TRUE;
                     patsrc = Pattern_Source(pat);
@@ -1019,15 +1403,43 @@ _FX const WCHAR *Process_MatchPath(
 
             pat = List_Next(pat);
         }
+
+        if ((! *is_closed) && bucket) {
+
+            pat = List_Head(&bucket->patterns);
+            while (pat) {
+
+                if (Pattern_Match(pat, path_lwr, path_len)) {
+                    *is_closed = TRUE;
+                    patsrc = Pattern_Source(pat);
+                    break;
+                }
+
+                if (path_lwr[path_len - 1] != L'\\') {
+                    path_lwr[path_len] = L'\\';
+                    if (Pattern_Match(pat, path_lwr, path_len + 1)) {
+                        path_lwr[path_len] = L'\0';
+                        *is_closed = TRUE;
+                        patsrc = Pattern_Source(pat);
+                        break;
+                    }
+                    path_lwr[path_len] = L'\0';
+                }
+
+                pat = List_Next(pat);
+            }
+        }
     }
 
     if (open_list && (! *is_closed)) {
 
-        pat = List_Head(open_list);
+        PATH_BUCKET *bucket =
+            Process_PathSetFindBucket(open_list, seg, seg_len);
+
+        pat = List_Head(&open_list->wild_patterns);
         while (pat) {
 
             if (Pattern_Match(pat, path_lwr, path_len)) {
-
                 *is_open = TRUE;
                 patsrc = Pattern_Source(pat);
                 break;
@@ -1036,7 +1448,6 @@ _FX const WCHAR *Process_MatchPath(
             if (path_lwr[path_len - 1] != L'\\') {
                 path_lwr[path_len] = L'\\';
                 if (Pattern_Match(pat, path_lwr, path_len + 1)) {
-
                     path_lwr[path_len] = L'\0';
                     *is_open = TRUE;
                     patsrc = Pattern_Source(pat);
@@ -1046,6 +1457,32 @@ _FX const WCHAR *Process_MatchPath(
             }
 
             pat = List_Next(pat);
+        }
+
+        if ((! *is_open) && bucket) {
+
+            pat = List_Head(&bucket->patterns);
+            while (pat) {
+
+                if (Pattern_Match(pat, path_lwr, path_len)) {
+                    *is_open = TRUE;
+                    patsrc = Pattern_Source(pat);
+                    break;
+                }
+
+                if (path_lwr[path_len - 1] != L'\\') {
+                    path_lwr[path_len] = L'\\';
+                    if (Pattern_Match(pat, path_lwr, path_len + 1)) {
+                        path_lwr[path_len] = L'\0';
+                        *is_open = TRUE;
+                        patsrc = Pattern_Source(pat);
+                        break;
+                    }
+                    path_lwr[path_len] = L'\0';
+                }
+
+                pat = List_Next(pat);
+            }
         }
     }
 
@@ -1061,12 +1498,11 @@ _FX const WCHAR *Process_MatchPath(
 #ifdef USE_MATCH_PATH_EX
 _FX ULONG Process_MatchPathEx(
     PROCESS *proc, const WCHAR *path, ULONG path_len, WCHAR path_code,
-    LIST *normal_list, 
-    LIST *open_list, LIST *closed_list,
-    LIST *read_list, LIST *write_list,
+    PATH_SET *normal_list,
+    PATH_SET *open_list, PATH_SET *closed_list,
+    PATH_SET *read_list, PATH_SET *write_list,
     const WCHAR** patsrc)
 {
-    PATTERN *pat;
     WCHAR *path_lwr;
     ULONG path_lwr_len;
     int match_len;
@@ -1074,6 +1510,9 @@ _FX ULONG Process_MatchPathEx(
     ULONG flags;
     USHORT wildc;
     ULONG mp_flags;
+    WCHAR seg[PATH_SET_SEG_MAX + 1];
+    ULONG seg_len;
+    PATH_BUCKET *bucket;
 
     path_lwr_len = (path_len + 4) * sizeof(WCHAR);
     path_lwr = Mem_Alloc(proc->pool, path_lwr_len);
@@ -1092,8 +1531,19 @@ _FX ULONG Process_MatchPathEx(
     _wcslwr(path_lwr);
 
     //
+    // (optimization #1) pre-select the one bucket every list consults:
+    // each Pattern_MatchPathListEx below runs twice per list -- once
+    // over the wildcard patterns and once over the first-segment
+    // bucket.  The best-match accumulators (level / match_len /
+    // flags / wildc) compose across the two calls, so the semantics
+    // of the flat walk are preserved exactly.
+    //
+
+    Process_PathSetFirstSeg(path_lwr, path_len, seg, &seg_len);
+
+    //
     // Rule priorities are implemented based on their specificity and match level with the process.
-    // The specificity describes how well a pattern matches a given path, 
+    // The specificity describes how well a pattern matches a given path,
     // i.e. how many characters of the path it matches, disregarding the last wild card.
     // The process match level describes in which way a rule applies to a given process:
     //  0 - exact match, eg. ...Path=program.exe,...
@@ -1102,11 +1552,11 @@ _FX ULONG Process_MatchPathEx(
     //  3 - global default, eg. ...Path=...
     // Rules with the most exact matches overrule the more generic once.
     // The match level overrules the specificity.
-    // 
+    //
     // A rule with less wildcards will overrule one with more
-    // 
+    //
     // If a rule ends with an * it is not exact and will be overruled by an exact rule
-    // 
+    //
     // Adding UseRuleSpecificity=n disables this behaviour and reverts to the old classical one
     //
 
@@ -1141,53 +1591,83 @@ _FX ULONG Process_MatchPathEx(
 
     //
     // closed path list, in non specific mode has the higher priority
-    // these paths are inaccessible for true and copy locations 
+    // these paths are inaccessible for true and copy locations
     //
 
-    if (Pattern_MatchPathListEx(path_lwr, path_len, closed_list, &level, &match_len, &flags, &wildc, patsrc)) {
+    bucket = closed_list
+        ? Process_PathSetFindBucket(closed_list, seg, seg_len) : NULL;
+
+    if ((closed_list &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &closed_list->wild_patterns, &level, &match_len, &flags, &wildc, patsrc))
+        || (bucket &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &bucket->patterns, &level, &match_len, &flags, &wildc, patsrc))) {
         mp_flags = TRUE_PATH_CLOSED_FLAG | COPY_PATH_CLOSED_FLAG;
         if (!proc->use_rule_specificity) goto finish;
     }
-    
+
     //
     // write path list, behaved on the driver side like closed path list
     // these paths allow read access to true location and read/write access to copy location
     //
-    
-    if (Pattern_MatchPathListEx(path_lwr, path_len, write_list, &level, &match_len, &flags, &wildc, patsrc)) {
+
+    bucket = write_list
+        ? Process_PathSetFindBucket(write_list, seg, seg_len) : NULL;
+
+    if ((write_list &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &write_list->wild_patterns, &level, &match_len, &flags, &wildc, patsrc))
+        || (bucket &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &bucket->patterns, &level, &match_len, &flags, &wildc, patsrc))) {
         mp_flags = TRUE_PATH_CLOSED_FLAG | COPY_PATH_OPEN_FLAG;
         if (!proc->use_rule_specificity) goto finish;
     }
-    
+
     //
     // read path list behaves in the kernel like the default normal behaviour
     // these paths allow read only access to true path and copy locations
     //
-    
-    if (Pattern_MatchPathListEx(path_lwr, path_len, read_list, &level, &match_len, &flags, &wildc, patsrc)) {
+
+    bucket = read_list
+        ? Process_PathSetFindBucket(read_list, seg, seg_len) : NULL;
+
+    if ((read_list &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &read_list->wild_patterns, &level, &match_len, &flags, &wildc, patsrc))
+        || (bucket &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &bucket->patterns, &level, &match_len, &flags, &wildc, patsrc))) {
         mp_flags = TRUE_PATH_READ_FLAG | COPY_PATH_READ_FLAG;
         if (!proc->use_rule_specificity) goto finish;
     }
-    
+
     //
     // normal path list restores normal behaviour when used in specific mode
     // these paths allow reading the true location and write to the copy location
     //
 
-    if (Pattern_MatchPathListEx(path_lwr, path_len, normal_list, &level, &match_len, &flags, &wildc, patsrc)) {
+    bucket = normal_list
+        ? Process_PathSetFindBucket(normal_list, seg, seg_len) : NULL;
+
+    if ((normal_list &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &normal_list->wild_patterns, &level, &match_len, &flags, &wildc, patsrc))
+        || (bucket &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &bucket->patterns, &level, &match_len, &flags, &wildc, patsrc))) {
         mp_flags = TRUE_PATH_READ_FLAG | COPY_PATH_OPEN_FLAG;
-        // don't goto finish as open can overwrite this 
+        // don't goto finish as open can overwrite this
     }
-    
+
     //
-    // open path has lowest priority in non specific mode 
+    // open path has lowest priority in non specific mode
     // these paths allow read/write access to the true location
     //
 
-    if (Pattern_MatchPathListEx(path_lwr, path_len, open_list, &level, &match_len, &flags, &wildc, patsrc)) {
+    bucket = open_list
+        ? Process_PathSetFindBucket(open_list, seg, seg_len) : NULL;
+
+    if ((open_list &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &open_list->wild_patterns, &level, &match_len, &flags, &wildc, patsrc))
+        || (bucket &&
+            Pattern_MatchPathListEx(path_lwr, path_len, &bucket->patterns, &level, &match_len, &flags, &wildc, patsrc))) {
         mp_flags = TRUE_PATH_OPEN_FLAG;
     }
-    
+
 
 finish:
     Mem_Free(path_lwr, path_lwr_len);
@@ -1277,11 +1757,12 @@ _FX void Process_GetProcessName(
 
 
 _FX BOOLEAN Process_CheckProcessName(
-    PROCESS *proc, LIST *open_paths, ULONG_PTR idProcess,
+    PROCESS *proc, PATH_SET *open_paths, ULONG_PTR idProcess,
     const WCHAR **pSetting)
 {
     BOOLEAN result;
     PATTERN *pat;
+    PATH_BUCKET *bucket;
     void *nbuf;
     ULONG nlen;
     WCHAR *nptr;
@@ -1300,10 +1781,23 @@ _FX BOOLEAN Process_CheckProcessName(
 
     //
     // Scan settings list for "$:ProcessName"
+    // (optimization #1: walk the bucketed set -- wild list first,
+    //  then every bucket; the "$:" rules have no path shape)
     //
 
-    pat = List_Head(open_paths);
-    while (pat) {
+    pat = List_Head(&open_paths->wild_patterns);
+    bucket = List_Head(&open_paths->buckets);
+
+    while (1) {
+
+        if (! pat) {
+            if (! bucket)
+                break;
+            pat = List_Head(&bucket->patterns);
+            bucket = List_Next(bucket);
+            if (! pat)
+                continue;
+        }
 
         const WCHAR *src = Pattern_Source(pat);
         pat = List_Next(pat);

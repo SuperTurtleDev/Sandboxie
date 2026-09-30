@@ -27,6 +27,64 @@
 
 #include "driver.h"
 #include "box.h"
+#include "common/pattern.h"
+
+
+//---------------------------------------------------------------------------
+// PATH_SET:  bucketed path-pattern container (approved optimization #1)
+//
+// The flat PATTERN lists the driver used to keep per path category
+// (open/closed/read/write/normal x file/key/ipc) are bucketed by the
+// FIRST PATH SEGMENT of each pattern ("\Device", "\REGISTRY",
+// "\Windows", "a:", ...).  Runtime matching extracts the query's
+// first segment, jumps to the one bucket (plus the wildcard bucket)
+// and Pattern_Match walks <20 candidates instead of 400+.
+//
+// Buckets hold BARE PATTERN nodes -- Pattern_MatchPathListEx and the
+// classic Pattern_Match walkers work on a bucket's LIST unchanged.
+//---------------------------------------------------------------------------
+
+
+#define PATH_SET_SEG_MAX 31             // chars, excluding terminator
+
+typedef struct _PATH_BUCKET {
+
+    LIST_ELEM list_elem;                // links in PATH_SET.buckets
+
+    WCHAR first[PATH_SET_SEG_MAX + 1];  // first segment, lower case,
+                                        // truncated at PATH_SET_SEG_MAX
+    LIST patterns;                      // PATTERN elements
+
+} PATH_BUCKET;
+
+
+typedef struct _PATH_SET {
+
+    LIST wild_patterns;                 // PATTERNs whose first segment
+                                        // contains a wildcard character
+    LIST buckets;                       // PATH_BUCKET elements
+
+} PATH_SET;
+
+
+// helpers (process_util.c).  A zeroed PATH_SET is a valid empty set;
+// stack instances must be initialized with Process_PathSetInit.
+
+void Process_PathSetInit(PATH_SET *set);
+
+BOOLEAN Process_PathSetAdd(
+    POOL *pool, PATH_SET *set, PATTERN *pat, BOOLEAN AddFirst);
+
+PATH_BUCKET *Process_PathSetFindBucket(
+    PATH_SET *set, const WCHAR *seg, ULONG seg_len);
+
+void Process_PathSetFirstSeg(
+    const WCHAR *path, ULONG path_len,
+    WCHAR *seg, ULONG *seg_len);
+
+PATTERN *Process_PathSetPop(PATH_SET *set);
+
+void Process_PathSetPurge(PATH_SET *set);
 
 // Boolean settings bitset (dynamic-box-arch plan B; see box_dynamic.h)
 // y/n keys of a dynamic box live in BOX_DYN_ENTRY.bool_bits[2];
@@ -234,12 +292,12 @@ struct _PROCESS {
 
     PERESOURCE file_lock;
 #ifdef USE_MATCH_PATH_EX
-    LIST normal_file_paths;             // PATTERN elements
+    PATH_SET normal_file_paths;             // PATTERN elements
 #endif
-    LIST open_file_paths;               // PATTERN elements
-    LIST closed_file_paths;             // PATTERN elements
-    LIST read_file_paths;               // PATTERN elements
-    LIST write_file_paths;              // PATTERN elements
+    PATH_SET open_file_paths;               // PATTERN elements
+    PATH_SET closed_file_paths;             // PATTERN elements
+    PATH_SET read_file_paths;               // PATTERN elements
+    PATH_SET write_file_paths;              // PATTERN elements
     BOOLEAN file_block_network_files;
     LIST blocked_dlls;
     ULONG file_trace;
@@ -255,12 +313,12 @@ struct _PROCESS {
     PERESOURCE key_lock;
     KEY_MOUNT *key_mount;
 #ifdef USE_MATCH_PATH_EX
-    LIST normal_key_paths;              // PATTERN elements
+    PATH_SET normal_key_paths;              // PATTERN elements
 #endif
-    LIST open_key_paths;                // PATTERN elements
-    LIST closed_key_paths;              // PATTERN elements
-    LIST read_key_paths;                // PATTERN elements
-    LIST write_key_paths;               // PATTERN elements
+    PATH_SET open_key_paths;                // PATTERN elements
+    PATH_SET closed_key_paths;              // PATTERN elements
+    PATH_SET read_key_paths;                // PATTERN elements
+    PATH_SET write_key_paths;               // PATTERN elements
     ULONG key_trace;
     BOOLEAN disable_key_flt;
 
@@ -268,11 +326,11 @@ struct _PROCESS {
 
     PERESOURCE ipc_lock;
 #ifdef USE_MATCH_PATH_EX
-    LIST normal_ipc_paths;              // PATTERN elements
+    PATH_SET normal_ipc_paths;              // PATTERN elements
 #endif
-    LIST open_ipc_paths;                // PATTERN elements
-    LIST closed_ipc_paths;              // PATTERN elements
-    LIST read_ipc_paths;                // PATTERN elements
+    PATH_SET open_ipc_paths;                // PATTERN elements
+    PATH_SET closed_ipc_paths;              // PATTERN elements
+    PATH_SET read_ipc_paths;                // PATTERN elements
     ULONG ipc_trace;
     BOOLEAN disable_object_flt;
     BOOLEAN ipc_namespace_isoaltion;
@@ -291,7 +349,7 @@ struct _PROCESS {
     void *block_fake_input_hwnd;
     void *gui_user_area;
     WCHAR *gui_class_name;
-    LIST open_win_classes;
+    PATH_SET open_win_classes;
     ULONG gui_trace;
 
     BOOLEAN filter_win32k_syscalls;
@@ -359,7 +417,7 @@ BOOLEAN Process_MatchImage(
 // is suffixed unless the value already contains a star anywhere
 
 BOOLEAN Process_GetPaths(
-    PROCESS *proc, LIST *list, const WCHAR *section_name, const WCHAR *setting_name, BOOLEAN AddStar);
+    PROCESS *proc, PATH_SET *list, const WCHAR *section_name, const WCHAR *setting_name, BOOLEAN AddStar);
 
 
 #ifndef USE_MATCH_PATH_EX
@@ -374,7 +432,7 @@ BOOLEAN Process_GetPaths2(
 
 #ifdef USE_TEMPLATE_PATHS
 BOOLEAN Process_GetTemplatePaths(
-    PROCESS *proc, LIST *list, const WCHAR *setting_name);
+    PROCESS *proc, PATH_SET *list, const WCHAR *setting_name);
 #endif
 
 
@@ -383,7 +441,7 @@ BOOLEAN Process_GetTemplatePaths(
 // entry, depending on AddFirst.  does not add a suffix wildcard
 
 BOOLEAN Process_AddPath(
-    PROCESS *proc, LIST *list, const WCHAR *setting_name,
+    PROCESS *proc, PATH_SET *list, const WCHAR *setting_name,
     BOOLEAN AddFirst, const WCHAR *value, BOOLEAN AddStar);
 
 
@@ -395,7 +453,7 @@ BOOLEAN Process_AddPath(
 
 const WCHAR *Process_MatchPath(
     POOL *pool, const WCHAR *path, ULONG path_len,
-    LIST *open_list, LIST *closed_list,
+    PATH_SET *open_list, PATH_SET *closed_list,
     BOOLEAN *is_open, BOOLEAN *is_closed);
 
 // Process_MatchPathEx:  given a list that was previously initialized with
@@ -418,9 +476,9 @@ const WCHAR *Process_MatchPath(
 
 ULONG Process_MatchPathEx(
     PROCESS *proc, const WCHAR *path, ULONG path_len, WCHAR path_code,
-    LIST *normal_list, 
-    LIST *open_list, LIST *closed_list,
-    LIST *read_list, LIST *write_list,
+    PATH_SET *normal_list,
+    PATH_SET *open_list, PATH_SET *closed_list,
+    PATH_SET *read_list, PATH_SET *write_list,
     const WCHAR** patsrc);
 
 // Process_GetConf:  retrieves a configuration data value for a given process
@@ -488,7 +546,7 @@ void Process_GetProcessName(
 // If contained, returns TRUE with *pSetting -> matching setting
 
 BOOLEAN Process_CheckProcessName(
-    PROCESS *proc, LIST *open_paths, ULONG_PTR idProcess,
+    PROCESS *proc, PATH_SET *open_paths, ULONG_PTR idProcess,
     const WCHAR **pSetting);
 
 

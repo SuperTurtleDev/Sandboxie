@@ -87,10 +87,10 @@ static void File_AdjustBoxFilePath(PROCESS *proc, HANDLE handle);
 
 static BOOLEAN File_InitPaths(PROCESS *proc,
 #ifdef USE_MATCH_PATH_EX
-    LIST *normal_file_paths,
+    PATH_SET *normal_file_paths,
 #endif
-    LIST *open_file_paths, LIST *closed_file_paths,
-    LIST *read_file_paths, LIST *write_file_paths);
+    PATH_SET *open_file_paths, PATH_SET *closed_file_paths,
+    PATH_SET *read_file_paths, PATH_SET *write_file_paths);
 
 static NTSTATUS File_Generic_MyParseProc(
     PROCESS *proc, PVOID ParseObject, ULONG device_type,
@@ -556,10 +556,10 @@ _FX void File_AdjustBoxFilePath(PROCESS *proc, HANDLE handle)
 
 _FX BOOLEAN File_InitPaths(PROCESS *proc,
 #ifdef USE_MATCH_PATH_EX
-    LIST *normal_file_paths,
+    PATH_SET *normal_file_paths,
 #endif
-    LIST *open_file_paths, LIST *closed_file_paths,
-    LIST *read_file_paths, LIST *write_file_paths)
+    PATH_SET *open_file_paths, PATH_SET *closed_file_paths,
+    PATH_SET *read_file_paths, PATH_SET *write_file_paths)
 {
 #ifdef USE_MATCH_PATH_EX
     static const WCHAR *_NormalPath = L"NormalFilePath";
@@ -2077,17 +2077,9 @@ _FX NTSTATUS File_Api_GetName(PROCESS *proc, ULONG64 *parms)
 //---------------------------------------------------------------------------
 
 
-_FX VOID File_PurgePathList(LIST* path_list)
+_FX VOID File_PurgePathList(PATH_SET* path_set)
 {
-    PATTERN *pat;
-
-    while (1) {
-        pat = List_Head(path_list);
-        if (! pat)
-            break;
-        List_Remove(path_list, pat);
-        Pattern_Free(pat);
-    }
+    Process_PathSetPurge(path_set);
 }
 
 
@@ -2100,12 +2092,12 @@ _FX NTSTATUS File_Api_RefreshPathList(PROCESS *proc, ULONG64 *parms)
 {
     NTSTATUS status;
 #ifdef USE_MATCH_PATH_EX
-    LIST normal_paths;
+    PATH_SET normal_paths;
 #endif
-    LIST open_paths;
-    LIST closed_paths;
-    LIST read_paths;
-    LIST write_paths;
+    PATH_SET open_paths;
+    PATH_SET closed_paths;
+    PATH_SET read_paths;
+    PATH_SET write_paths;
     PATTERN *pat;
     BOOLEAN ok;
     KIRQL irql;
@@ -2122,12 +2114,12 @@ _FX NTSTATUS File_Api_RefreshPathList(PROCESS *proc, ULONG64 *parms)
     //
 
 #ifdef USE_MATCH_PATH_EX
-    List_Init(&normal_paths);
+    Process_PathSetInit(&normal_paths);
 #endif
-    List_Init(&open_paths);
-    List_Init(&closed_paths);
-    List_Init(&read_paths);
-    List_Init(&write_paths);
+    Process_PathSetInit(&open_paths);
+    Process_PathSetInit(&closed_paths);
+    Process_PathSetInit(&read_paths);
+    Process_PathSetInit(&write_paths);
 
     ok = File_InitPaths(proc,
 #ifdef USE_MATCH_PATH_EX
@@ -2160,12 +2152,12 @@ _FX NTSTATUS File_Api_RefreshPathList(PROCESS *proc, ULONG64 *parms)
         //
 
 #ifdef USE_MATCH_PATH_EX
-        memcpy(&proc->normal_file_paths,  &normal_paths,    sizeof(LIST));
+        memcpy(&proc->normal_file_paths,  &normal_paths,    sizeof(PATH_SET));
 #endif
-        memcpy(&proc->open_file_paths,    &open_paths,      sizeof(LIST));
-        memcpy(&proc->closed_file_paths,  &closed_paths,    sizeof(LIST));
-        memcpy(&proc->read_file_paths,    &read_paths,      sizeof(LIST));
-        memcpy(&proc->write_file_paths,   &write_paths,     sizeof(LIST));
+        memcpy(&proc->open_file_paths,    &open_paths,      sizeof(PATH_SET));
+        memcpy(&proc->closed_file_paths,  &closed_paths,    sizeof(PATH_SET));
+        memcpy(&proc->read_file_paths,    &read_paths,     sizeof(PATH_SET));
+        memcpy(&proc->write_file_paths,   &write_paths,    sizeof(PATH_SET));
 
     } else {
 

@@ -769,9 +769,10 @@ _FX NTSTATUS Process_Api_QueryPathList(PROCESS *proc, ULONG64 *parms)
 {
     API_QUERY_PATH_LIST_ARGS *args = (API_QUERY_PATH_LIST_ARGS *)parms;
     PERESOURCE lock;
-    LIST *list;
+    PATH_SET *list;
     WCHAR *path;
     PATTERN *pat;
+    PATH_BUCKET *bucket;
     NTSTATUS status;
     ULONG path_len;
     KIRQL irql;
@@ -893,12 +894,24 @@ _FX NTSTATUS Process_Api_QueryPathList(PROCESS *proc, ULONG64 *parms)
 
     //
     // count the length of the desired path list
+    // (optimization #1: full walk = wild list + every bucket)
     //
 
     path_len = 0;
 
-    pat = List_Head(list);
-    while (pat) {
+    bucket = List_Head(&list->buckets);
+    pat = List_Head(&list->wild_patterns);
+    while (1) {
+
+        if (! pat) {
+            if (! bucket)
+                break;
+            pat = List_Head(&bucket->patterns);
+            bucket = List_Next(bucket);
+            if (! pat)
+                continue;
+        }
+
         if (prepend_level) path_len += sizeof(ULONG);
         path_len += (wcslen(Pattern_Source(pat)) + 1) * sizeof(WCHAR);
         pat = List_Next(pat);
@@ -912,7 +925,7 @@ _FX NTSTATUS Process_Api_QueryPathList(PROCESS *proc, ULONG64 *parms)
     //
 
     __try {
-        
+
         if(args->path_str.val) {
 
             //
@@ -924,12 +937,23 @@ _FX NTSTATUS Process_Api_QueryPathList(PROCESS *proc, ULONG64 *parms)
                 status = STATUS_BUFFER_TOO_SMALL;
                 __leave;
             }
-            
+
             path = args->path_str.val;
             ProbeForWrite(path, path_len, sizeof(WCHAR));
 
-            pat = List_Head(list);
-            while (pat) {
+            bucket = List_Head(&list->buckets);
+            pat = List_Head(&list->wild_patterns);
+            while (1) {
+
+                if (! pat) {
+                    if (! bucket)
+                        break;
+                    pat = List_Head(&bucket->patterns);
+                    bucket = List_Next(bucket);
+                    if (! pat)
+                        continue;
+                }
+
                 if (prepend_level) {
                     *((ULONG*)path) = Pattern_Level(pat);
                     path += sizeof(ULONG)/sizeof(WCHAR);

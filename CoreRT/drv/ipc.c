@@ -926,8 +926,16 @@ _FX BOOLEAN Ipc_IsRunRestricted(PROCESS *proc)
     // check Start/Run restrictions
     // issue message SBIE1308 when Start/Run restrictions apply
     //
+    // (optimization #1) the closed set is bucketed; the bare "*"
+    // Start/Run rule can only live in the wildcard list (its first
+    // segment is a wildcard), so the bucket walk below is for
+    // completeness under odd rule shapes
+    //
 
-    PATTERN *pattern = List_Head(&proc->closed_ipc_paths);
+    PATH_BUCKET *bucket;
+    PATTERN *pattern;
+
+    pattern = List_Head(&proc->closed_ipc_paths.wild_patterns);
     while (pattern) {
 
         const WCHAR *source = Pattern_Source(pattern);
@@ -943,6 +951,30 @@ _FX BOOLEAN Ipc_IsRunRestricted(PROCESS *proc)
         }
 
         pattern = List_Next(pattern);
+    }
+
+    bucket = List_Head(&proc->closed_ipc_paths.buckets);
+    while (bucket) {
+
+        pattern = List_Head(&bucket->patterns);
+        while (pattern) {
+
+            const WCHAR *source = Pattern_Source(pattern);
+            if (source[0] == L'*' && source[1] == L'\0') {
+
+                if (proc->ipc_warn_startrun) {
+
+                    Process_LogMessage(proc, MSG_STARTRUN_ACCESS_DENIED);
+                    proc->ipc_warn_startrun = FALSE;
+                }
+
+                return TRUE;
+            }
+
+            pattern = List_Next(pattern);
+        }
+
+        bucket = List_Next(bucket);
     }
 
     return FALSE;

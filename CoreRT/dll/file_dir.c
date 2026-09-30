@@ -3547,6 +3547,15 @@ _FX NTSTATUS File_MyQueryDirectoryFile(
 
 //#include <Knownfolders.h>
 
+//
+// (approved optimization #3) DefaultFolder cache:  enumerated once per
+// process, zero IOCTLs afterwards.  Entries are [raw, nt-path] pairs.
+//
+
+static WCHAR **s_DefaultFolders = NULL;
+static ULONG s_DefaultFolderCount = 0;
+
+
 _FX void File_CreateBaseFolders()
 {
     NTSTATUS status;
@@ -3557,7 +3566,7 @@ _FX void File_CreateBaseFolders()
     //
 
     //File_CreateBoxedPath(File_SysVolume);
-    // 
+    //
     //if (SbieApi_QueryConfBool(NULL, L"SeparateUserFolders", TRUE)) {
     //    File_CreateBoxedPath(File_AllUsers);
     //    File_CreateBoxedPath(File_CurrentUser);
@@ -3573,22 +3582,68 @@ _FX void File_CreateBaseFolders()
         File_CreateBoxedPath(conf_buf);
     }
 
-    for (ULONG index = 0; ; ++index) {
+    //
+    // enumerate DefaultFolder once into the process-local cache, then
+    // replay the box-path creation from the cache
+    //
 
-        status = SbieApi_QueryConf(
-            NULL, L"DefaultFolder", index | CONF_GET_NO_EXPAND, conf_buf, sizeof(conf_buf) - 16 * sizeof(WCHAR));
-        if (!NT_SUCCESS(status))
-            break;
+    if (! s_DefaultFolders) {
 
-        WCHAR expanded[MAX_PATH];
-        DWORD len = ExpandEnvironmentStringsW(conf_buf, expanded, MAX_PATH);
-        if (len == 0 || len > MAX_PATH || wcschr(expanded, L'%'))
-            continue;
+        ULONG count = 0;
+        ULONG capacity = 32;
 
-        WCHAR* pathNT = File_TranslateDosToNtPath(expanded);
-        if (pathNT) {
-            File_CreateBoxedPath(pathNT);
-            Dll_Free(pathNT);
+        s_DefaultFolders = Dll_Alloc(
+            (capacity + 1) * sizeof(WCHAR *) * 2);
+        if (! s_DefaultFolders)
+            return;
+
+        for (ULONG index = 0; ; ++index) {
+
+            status = SbieApi_QueryConf(
+                NULL, L"DefaultFolder", index | CONF_GET_NO_EXPAND,
+                conf_buf, sizeof(conf_buf) - 16 * sizeof(WCHAR));
+            if (!NT_SUCCESS(status))
+                break;
+
+            WCHAR expanded[MAX_PATH];
+            DWORD len = ExpandEnvironmentStringsW(conf_buf, expanded, MAX_PATH);
+            if (len == 0 || len > MAX_PATH || wcschr(expanded, L'%'))
+                continue;
+
+            WCHAR* pathNT = File_TranslateDosToNtPath(expanded);
+            if (! pathNT)
+                continue;
+
+            if (count == capacity) {
+
+                WCHAR **grown = Dll_Alloc(
+                    (capacity * 2 + 1) * sizeof(WCHAR *) * 2);
+                if (! grown) {
+                    Dll_Free(pathNT);
+                    break;
+                }
+                memcpy(grown, s_DefaultFolders,
+                       count * sizeof(WCHAR *) * 2);
+                Dll_Free(s_DefaultFolders);
+                s_DefaultFolders = grown;
+                capacity *= 2;
+            }
+
+            s_DefaultFolders[count * 2] =
+                Dll_Alloc((wcslen(conf_buf) + 1) * sizeof(WCHAR));
+            if (s_DefaultFolders[count * 2])
+                wcscpy(s_DefaultFolders[count * 2], conf_buf);
+
+            s_DefaultFolders[count * 2 + 1] = pathNT;
+            ++count;
         }
+
+        s_DefaultFolderCount = count;
+    }
+
+    for (ULONG i = 0; i < s_DefaultFolderCount; ++i) {
+
+        if (s_DefaultFolders[i * 2 + 1])
+            File_CreateBoxedPath(s_DefaultFolders[i * 2 + 1]);
     }
 }
