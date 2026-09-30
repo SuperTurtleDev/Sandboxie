@@ -25,6 +25,7 @@
 #include "api.h"
 #include "util.h"
 #include "conf.h"
+#include "dyn_data.h"
 
 
 //---------------------------------------------------------------------------
@@ -312,7 +313,8 @@ _FX BOOLEAN Process_Low_InitConsole(PROCESS *proc)
     NTSTATUS status;
 
 	// NoSbieCons BEGIN
-	if (proc->bAppCompartment || Conf_Get_Boolean(proc->box->name, L"NoSandboxieConsole", 0, FALSE))
+	// (!Dyndata_Active reproduces the old NoSecurityIsolation fallback)
+	if (!Dyndata_Active || Conf_Get_Boolean(proc->box->name, L"NoSandboxieConsole", 0, FALSE))
 		return TRUE;
 	// NoSbieCons END
 

@@ -32,6 +32,25 @@
 //      API_BOX_EXEC     SbieBoxExec(handle, exe, ...)
 //      API_BOX_DESTROY  SbieBoxDestroy(handle)
 //
+// Configuration blob (config-to-kernel model):
+//      The API_BOX_CREATE text is a multi-section ini-style blob.  Every
+//      section the box needs travels with the box -- the driver embeds no
+//      default tables and needs no Templates.ini:
+//
+//          [TemplateDefaultPaths]   skeleton IPC/file rules (per box)
+//          [TemplateNetworkPaths]   network device rules (per box)
+//          [BoxConfig]              the box section itself (renamed to the
+//                                   generated BoxConfig_<id>)
+//
+//      A flat "Key=Value" blob with no section headers keeps working and
+//      lands entirely in the box section (legacy single-section form).
+//
+// Privilege model:
+//      CREATE / EXEC / DESTROY require an elevated administrator caller
+//      (UAC-aware: the Administrators SID must be enabled, not deny-only).
+//      SYSTEM -- SbieSvc -- passes.  A future SandboxieUsers group check
+//      slots into BoxDyn_CheckAccess.
+//
 // Auto teardown:
 //      - last boxed process exits           -> Process_Delete hook
 //      - creator process exits (no destroy) -> Process_NotifyProcess_Delete hook
@@ -90,6 +109,12 @@ static void BoxDyn_KillBox(BOX_DYN_ENTRY *entry);
 
 static NTSTATUS BoxDyn_GetSidAndSession(
     UNICODE_STRING *SidString, ULONG *SessionId);
+
+static NTSTATUS BoxDyn_CheckAccess(void);
+
+static NTSTATUS BoxDyn_ResetTemplateSection(const WCHAR *name);
+
+static void BoxDyn_DiscardTemplateSections(void);
 
 static NTSTATUS BoxDyn_LoadConfigText(
     const WCHAR *section, WCHAR *text, BOOLEAN *enabled_seen);
@@ -428,20 +453,177 @@ _FX NTSTATUS BoxDyn_GetSidAndSession(
 
 
 //---------------------------------------------------------------------------
+// BoxDyn_CheckAccess
+//---------------------------------------------------------------------------
+//
+// Privilege gate for the three dynamic-box API entry points
+// (dynamic-box-arch):
+//
+//      - elevated administrators pass.  UAC-aware: the caller's token must
+//        carry BUILTIN\Administrators with SE_GROUP_ENABLED and WITHOUT
+//        SE_GROUP_USE_FOR_DENY_ONLY -- an admin account on a filtered
+//        (non-elevated) token carries the SID deny-only and is rejected.
+//      - SYSTEM (SbieSvc) passes: its token has Administrators enabled.
+//      - a standard user is rejected with STATUS_ACCESS_DENIED.
+//
+// TODO (SandboxieUsers): also accept members of the SandboxieUsers local
+// group; needs a group-SID lookup (LSA) kernel-side, or the SID handed to
+// the driver by SbieSvc at service start.
+//
+
+
+_FX NTSTATUS BoxDyn_CheckAccess(void)
+{
+    //
+    // BUILTIN\Administrators (S-1-5-32-544), built byte-wise like
+    // token.c's Token_AdministratorsSid: the Rtl SID helpers are not in
+    // the kernel import set this driver links against.
+    //
+
+    static UCHAR AdminSid[16] = {
+        1,                                      // Revision
+        2,                                      // SubAuthorityCount
+        0,0,0,0,0,5, // SECURITY_NT_AUTHORITY   // IdentifierAuthority
+        SECURITY_BUILTIN_DOMAIN_RID,0,0,0,      // SubAuthority 1
+        (DOMAIN_ALIAS_RID_ADMINS & 0xFF),       // SubAuthority 2
+            ((DOMAIN_ALIAS_RID_ADMINS & 0xFF00) >> 8),0,0
+    };
+
+    PACCESS_TOKEN token;
+    PTOKEN_GROUPS groups;
+    NTSTATUS status;
+    BOOLEAN is_admin = FALSE;
+    ULONG i;
+
+    token = PsReferencePrimaryToken(PsGetCurrentProcess());
+    if (! token)
+        return STATUS_ACCESS_DENIED;
+
+    status = SeQueryInformationToken(token, TokenGroups, &groups);
+
+    PsDereferencePrimaryToken(token);
+
+    if (! NT_SUCCESS(status))
+        return status;
+
+    for (i = 0; i < groups->GroupCount; ++i) {
+
+        ULONG attrs = groups->Groups[i].Attributes;
+
+        if (RtlEqualSid(groups->Groups[i].Sid, AdminSid)) {
+            if ((attrs & SE_GROUP_ENABLED) &&
+                ! (attrs & SE_GROUP_USE_FOR_DENY_ONLY))
+                is_admin = TRUE;
+            break;
+        }
+    }
+
+    ExFreePool(groups);
+
+    return (is_admin ? STATUS_SUCCESS : STATUS_ACCESS_DENIED);
+}
+
+
+//---------------------------------------------------------------------------
+// BoxDyn_TemplateSections
+//---------------------------------------------------------------------------
+//
+// The two per-box skeleton sections a blob may carry.  Fixed set: anything
+// else in a [header] is rejected, so a blob cannot inject arbitrary
+// sections into Conf_Data (in particular not another BoxConfig_* box).
+//
+
+
+static const WCHAR *BoxDyn_TemplateSections[2] = {
+    L"TemplateDefaultPaths", L"TemplateNetworkPaths"
+};
+
+
+//---------------------------------------------------------------------------
+// BoxDyn_ResetTemplateSection
+//---------------------------------------------------------------------------
+//
+// Prepare the virtual conf section for one skeleton section of the blob:
+// delete a previously installed virtual copy (idempotent replace -- each
+// blob is authoritative and self-contained), then create it fresh and
+// mark it template-origin so section enumeration keeps hiding it.
+//
+// A section that came from a real ini file is NOT replaced
+// (Conf_DeleteTempSection refuses non-virtual sections): the ini wins,
+// exactly like the old embedded-skeleton semantics.
+//
+
+
+_FX NTSTATUS BoxDyn_ResetTemplateSection(const WCHAR *name)
+{
+    NTSTATUS status;
+
+    status = Conf_DeleteTempSection(name);
+
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND || NT_SUCCESS(status))
+        status = STATUS_SUCCESS;
+    else if (status == STATUS_ACCESS_DENIED)
+        return STATUS_SUCCESS;      // provided by an ini file: ini wins
+
+    if (! NT_SUCCESS(status))
+        return status;              // e.g. STATUS_DEVICE_BUSY: retry later
+
+    status = Conf_CreateTempSection(name);
+    if (! NT_SUCCESS(status))
+        return status;
+
+    return Conf_MarkSectionTemplate(name);
+}
+
+
+//---------------------------------------------------------------------------
+// BoxDyn_DiscardTemplateSections
+//---------------------------------------------------------------------------
+//
+// Rollback helper for a failed API_BOX_CREATE: drop the virtual skeleton
+// sections this blob may have (re)installed.  Non-virtual (ini) sections
+// are refused by Conf_DeleteTempSection and thus survive.
+//
+
+
+_FX void BoxDyn_DiscardTemplateSections(void)
+{
+    ULONG i;
+
+    for (i = 0; i < 2; ++i)
+        Conf_DeleteTempSection(BoxDyn_TemplateSections[i]);
+}
+
+
+//---------------------------------------------------------------------------
 // BoxDyn_LoadConfigText
 //---------------------------------------------------------------------------
 //
-// Parse the KV stream ("Key=Value" lines, \n or \r\n separated, '#'
-// comments, repeated keys append) into the temp section.  Trailing and
-// leading whitespace is trimmed like Conf_Read_Settings does.
+// Parse the multi-section KV blob into Conf_Data ("Key=Value" lines,
+// \n or \r\n separated, '#' / ';' comments, repeated keys append).
+//
+//      [TemplateDefaultPaths] / [TemplateNetworkPaths]
+//          -> their own virtual template sections (replaced if a previous
+//             dynamic box installed a virtual copy; an ini copy wins)
+//      [BoxConfig]
+//          -> the generated box section
+//      no header before the first Key=Value line
+//          -> legacy flat form: everything lands in the box section
+//
+// Any other [header] is rejected with STATUS_INVALID_PARAMETER, as is a
+// Key line with an empty value.  Trailing and leading whitespace is
+// trimmed like Conf_Read_Settings does.
 //
 
 
 _FX NTSTATUS BoxDyn_LoadConfigText(
     const WCHAR *section, WCHAR *text, BOOLEAN *enabled_seen)
 {
+    static const WCHAR *BoxSectionHeader = L"BoxConfig";
+
     NTSTATUS status = STATUS_SUCCESS;
     WCHAR *line = text;
+    const WCHAR *target = section;      // box section (flat form default)
 
     *enabled_seen = FALSE;
 
@@ -475,6 +657,58 @@ _FX NTSTATUS BoxDyn_LoadConfigText(
             goto next_line;
 
         //
+        // [section] header switches the target section
+        //
+
+        if (*line == L'[') {
+
+            WCHAR *close = wcschr(line, L']');
+            WCHAR *hdr;
+
+            if (! close) {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *close = L'\0';          // ignore anything after the ']'
+
+            hdr = line + 1;
+            while (*hdr == L' ' || *hdr == L'\t')
+                ++hdr;
+
+            if (hdr == close || *hdr == L'\0') {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if (_wcsicmp(hdr, BoxSectionHeader) == 0) {
+
+                target = section;
+
+            } else {
+
+                ULONG i;
+                BOOLEAN known = FALSE;
+
+                for (i = 0; i < 2; ++i) {
+                    if (_wcsicmp(hdr, BoxDyn_TemplateSections[i]) == 0) {
+                        known = TRUE;
+                        status = BoxDyn_ResetTemplateSection(hdr);
+                        if (NT_SUCCESS(status))
+                            target = BoxDyn_TemplateSections[i];
+                        break;
+                    }
+                }
+
+                if (! known)
+                    status = STATUS_INVALID_PARAMETER;
+                if (! NT_SUCCESS(status))
+                    break;
+            }
+
+            goto next_line;
+        }
+
+        //
         // split Key=Value
         //
 
@@ -506,13 +740,14 @@ _FX NTSTATUS BoxDyn_LoadConfigText(
         }
 
         //
-        // append to the temp section (list semantics for repeated keys)
+        // append to the current target section (list semantics for
+        // repeated keys); Enabled counts only in the box section
         //
 
-        if (_wcsicmp(name, BoxDyn_Enabled) == 0)
+        if (target == section && _wcsicmp(name, BoxDyn_Enabled) == 0)
             *enabled_seen = TRUE;
 
-        status = Conf_AddTempSetting(section, name, value);
+        status = Conf_AddTempSetting(target, name, value);
         if (! NT_SUCCESS(status))
             break;
 
@@ -556,6 +791,15 @@ _FX NTSTATUS BoxDynamic_Api_Create(PROCESS *proc, ULONG64 *parms)
 
     if (proc)
         return STATUS_ACCESS_DENIED;
+
+    //
+    // privilege gate: elevated admin / SandboxieUsers (see
+    // BoxDyn_CheckAccess)
+    //
+
+    status = BoxDyn_CheckAccess();
+    if (! NT_SUCCESS(status))
+        return status;
 
     //
     // copy the configuration text from user space
@@ -650,6 +894,7 @@ _FX NTSTATUS BoxDynamic_Api_Create(PROCESS *proc, ULONG64 *parms)
     Mem_Free(text, text_len);
 
     if (! NT_SUCCESS(status)) {
+        BoxDyn_DiscardTemplateSections();   // partial skeleton rollback
         Conf_DeleteTempSection(entry->section);
         Mem_Free(entry->sid, entry->sid_len);
         Mem_Free(entry, sizeof(BOX_DYN_ENTRY));
@@ -674,6 +919,7 @@ _FX NTSTATUS BoxDynamic_Api_Create(PROCESS *proc, ULONG64 *parms)
     KeLowerIrql(irql);
 
     if (! NT_SUCCESS(status)) {
+        BoxDyn_DiscardTemplateSections();
         Conf_DeleteTempSection(entry->section);
         Mem_Free(entry->sid, entry->sid_len);
         Mem_Free(entry, sizeof(BOX_DYN_ENTRY));
@@ -753,6 +999,10 @@ _FX NTSTATUS BoxDynamic_Api_Exec(PROCESS *proc, ULONG64 *parms)
 
     if (proc)
         return STATUS_ACCESS_DENIED;
+
+    status = BoxDyn_CheckAccess();
+    if (! NT_SUCCESS(status))
+        return status;
 
     pid = args->process_id.val;
     if (! pid)
@@ -929,6 +1179,10 @@ _FX NTSTATUS BoxDynamic_Api_Destroy(PROCESS *proc, ULONG64 *parms)
 
     if (proc)
         return STATUS_ACCESS_DENIED;
+
+    status = BoxDyn_CheckAccess();
+    if (! NT_SUCCESS(status))
+        return status;
 
     KeRaiseIrql(APC_LEVEL, &irql);
     ExAcquireResourceExclusiveLite(BoxDyn_Lock, TRUE);

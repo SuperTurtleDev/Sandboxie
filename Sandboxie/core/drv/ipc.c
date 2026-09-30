@@ -655,12 +655,6 @@ _FX BOOLEAN Ipc_InitPaths(PROCESS* proc)
     if (ok)
         ok = Process_GetTemplatePaths(proc, &proc->normal_ipc_paths, _NormalPath);
 #else
-    //if (ok && proc->use_privacy_mode) {
-    //    for (i = 0; normalpaths[i] && ok; ++i) {
-    //        ok = Process_AddPath(proc, &proc->normal_ipc_paths, NULL,
-    //                          TRUE, normalpaths[i], FALSE);
-    //    }
-    //}
 #endif
 
     if (!ok) {

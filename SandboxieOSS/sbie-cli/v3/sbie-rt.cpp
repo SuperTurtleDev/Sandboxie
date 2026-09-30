@@ -9,6 +9,13 @@
 // (NtOpenFile + NtDeviceIoControlFile); no SbieDll.dll dependency,
 // so the tool works in a bare SbieRT / ValidationOS deployment.
 //
+// The config blob handed to "create" is fully self-contained
+// (config-to-kernel): each box carries its own skeleton sections
+// ([TemplateDefaultPaths] / [TemplateNetworkPaths]) plus [BoxConfig];
+// the driver embeds no defaults.  The presets in examples\*.kv show
+// the four box shapes.  All three dynamic-box IOCTLs require an
+// elevated-admin caller (UAC-aware check in the driver).
+//
 // Commands:
 //   sbie-rt drv                     driver probe: version + dynamic API present
 //   sbie-rt create <config.kv>      SbieBoxCreate   -> prints handle + box name
@@ -208,6 +215,141 @@ static uint64_t ParseHandle(const wchar_t* s)
 }
 
 // ---------------------------------------------------------------------------
+// SbieSvc runtime dependency (dynamic-box-arch injection chain)
+// ---------------------------------------------------------------------------
+//
+// API_BOX_EXEC claims a suspended process through Process_NotifyProcess_
+// Create, and Process_Low_Inject asks the SbieSvc DriverAssist port to
+// inject SbieLow (embedded in SbieSvc.exe as the LOWLEVEL64/LOWLEVEL32
+// resources); SbieLow then loads SbieDll.dll from the driver home path
+// (the SbieDrv.sys ImagePath directory).  Without a running SbieSvc the
+// boxed process dies on resume, so exec makes sure the service is up:
+//
+//      1. already running (any SbieSvc.exe process)      -> proceed
+//      2. SCM route: StartService("SbieSvc")             -> normal hosts
+//      3. detached CreateProcess of <exe dir>\SbieSvc.exe-> bare hosts
+//         without the service registered (note: stock SbieSvc.exe calls
+//         StartServiceCtrlDispatcher and exits if no SCM exists at all)
+//
+
+#include <tlhelp32.h>
+
+static bool IsProcessRunning(const wchar_t* exeName)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return false;
+
+    PROCESSENTRY32W pe;
+    memset(&pe, 0, sizeof(pe));
+    pe.dwSize = sizeof(pe);
+
+    bool found = false;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, exeName) == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+static bool StartSbieSvcViaScm()
+{
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm)
+        return false;
+
+    SC_HANDLE svc = OpenServiceW(scm, L"SbieSvc",
+                                 SERVICE_START | SERVICE_QUERY_STATUS);
+    if (!svc) {
+        CloseServiceHandle(scm);
+        return false;
+    }
+
+    BOOL ok = StartServiceW(svc, 0, NULL);
+    if (!ok && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        return false;
+    }
+
+    // wait for SERVICE_RUNNING, max ~10s
+    for (int i = 0; i < 100; ++i) {
+        SERVICE_STATUS st;
+        memset(&st, 0, sizeof(st));
+        if (QueryServiceStatus(svc, &st) &&
+                st.dwCurrentState == SERVICE_RUNNING)
+            break;
+        Sleep(100);
+    }
+
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+
+    return IsProcessRunning(L"SbieSvc.exe");
+}
+
+static bool StartSbieSvcDetached()
+{
+    wchar_t self[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
+    if (!n || n >= MAX_PATH)
+        return false;
+
+    wchar_t* slash = wcsrchr(self, L'\\');
+    if (!slash)
+        return false;
+    if (!wcscpy_s(slash + 1, self + MAX_PATH - (slash + 1), L"SbieSvc.exe"))
+        return false;
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+
+    if (!CreateProcessW(self, NULL, NULL, NULL, FALSE,
+                        DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
+        fprintf(stderr, "sbie-rt: CreateProcess(%ls) failed %lu\n",
+                self, GetLastError());
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    // give it a moment to come up (and to fail fast if SCM rejects it)
+    for (int i = 0; i < 50 && !IsProcessRunning(L"SbieSvc.exe"); ++i)
+        Sleep(100);
+
+    return IsProcessRunning(L"SbieSvc.exe");
+}
+
+static void EnsureSbieSvcRunning()
+{
+    if (IsProcessRunning(L"SbieSvc.exe"))
+        return;
+
+    fprintf(stderr, "sbie-rt: SbieSvc not running, starting it\n");
+
+    if (StartSbieSvcViaScm()) {
+        fprintf(stderr, "sbie-rt: SbieSvc started via SCM\n");
+        return;
+    }
+    if (StartSbieSvcDetached()) {
+        fprintf(stderr, "sbie-rt: SbieSvc launched detached\n");
+        return;
+    }
+
+    fprintf(stderr,
+            "sbie-rt: WARNING - could not start SbieSvc; exec will claim "
+            "the process but SbieLow injection will fail\n");
+}
+
+// ---------------------------------------------------------------------------
 // commands
 // ---------------------------------------------------------------------------
 
@@ -302,6 +444,13 @@ static int CmdExec(const std::vector<std::wstring>& args)
     }
 
     uint64_t handle = ParseHandle(args[2].c_str());
+
+    //
+    // the injection chain needs SbieSvc (DriverAssist -> SbieLow ->
+    // SbieDll); make sure it is up before the target process exists
+    //
+
+    EnsureSbieSvcRunning();
 
     std::wstring cmd = L"\"" + args[3] + L"\"";
     for (size_t i = 4; i < args.size(); ++i)

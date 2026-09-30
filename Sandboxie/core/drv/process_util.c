@@ -581,16 +581,18 @@ BOOLEAN Process_GetTemplatePaths(PROCESS *proc, LIST *list, const WCHAR *setting
 {
     BOOLEAN ok;
 
+    //
+    // (dynamic-box-arch) the two skeleton sections come from the per-box
+    // configuration:  API_BOX_CREATE writes [TemplateDefaultPaths] (and
+    // [TemplateNetworkPaths]) into Conf_Data from the caller's blob, so a
+    // runtime deployment needs no Templates.ini and the driver embeds no
+    // default tables.  [TemplateNetworkPaths] is consumed by
+    // File_InitPaths' InternetAccessDevices gate (network open/block), not
+    // here.  The old mode-driven sections -- SMod / PMod / AppC -- are gone:
+    // their rules live in the box section as plain keys.
+    //
+
     ok = Process_GetPaths(proc, list, L"TemplateDefaultPaths", setting_name, FALSE);
-
-    if (ok && proc->restrict_devices)
-        ok = Process_GetPaths(proc, list, L"TemplateSModPaths", setting_name, FALSE);
-
-    if (ok && proc->use_privacy_mode)
-        ok = Process_GetPaths(proc, list, L"TemplatePModPaths", setting_name, FALSE);
-
-    if (ok && proc->bAppCompartment)
-        ok = Process_GetPaths(proc, list, L"TemplateAppCPaths", setting_name, FALSE);
 
     return ok;
 }
@@ -993,30 +995,18 @@ _FX ULONG Process_MatchPathEx(
 
         mp_flags = TRUE_PATH_CLOSED_FLAG | COPY_PATH_CLOSED_FLAG;
     }
-    //else if (!proc->use_privacy_mode || path_code == L'i') {
     else {
 
         //
-        // in normal sandbox mode we have read access to all locations unless restricted,
-        // and all writes are redirected to the sandbox
+        // the sandbox default: read access to all locations unless restricted,
+        // and all writes are redirected to the sandbox.  Privacy-style
+        // shadow access is expressed per box with WriteFilePath/WriteKeyPath
+        // keys (the write lists are matched before the normal list, so a
+        // write rule shadows the default).
         //
 
         mp_flags = TRUE_PATH_READ_FLAG | COPY_PATH_OPEN_FLAG; // normal mode
     }
-    //else {
-    //
-    //    //
-    //    // in privacy mode we only have read access to selected generic locations,
-    //    // and read access to user data must be explicityl grated,
-    //    // also all writes are redirected to the sandbox
-    //    //
-    //    // Note: as of 5.60.1 all locations are locked down explicitly while the root mode remains normal
-    //    //
-    //    // To enable privacy enhanced mode add UsePrivacyMode=y 
-    //    //
-    //
-    //    mp_flags = TRUE_PATH_CLOSED_FLAG | COPY_PATH_OPEN_FLAG; // write path mode
-    //}
 
     //
     // closed path list, in non specific mode has the higher priority

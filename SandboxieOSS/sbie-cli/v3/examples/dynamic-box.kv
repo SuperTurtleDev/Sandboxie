@@ -2,12 +2,18 @@
 #
 # Feed to:  sbie-rt create dynamic-box.kv
 #
-# This is the KV stream API_BOX_CREATE parses.  Any Sandboxie.ini box
-# setting is legal here; lines '#' / ';' are comments, repeated keys
-# append (list semantics).  Enabled=y is forced by the driver when not
-# supplied.  The %SANDBOX% variable expands to the generated box name
-# (BoxConfig_<id>), %USER% / %SID% / %SESSION% to the box identity
-# captured at create time.
+# This is the LEGACY FLAT form of the KV stream API_BOX_CREATE parses:
+# "Key=Value" lines without any [section] header all land in the box
+# section itself.  The preset files (standard/hardened/privacy/appc.kv)
+# use the multi-section form: a self-contained blob that also carries
+# [TemplateDefaultPaths] + [TemplateNetworkPaths] skeleton sections plus
+# [BoxConfig] for the box itself -- the driver embeds no defaults.
+#
+# Any Sandboxie.ini box setting is legal here; lines '#' / ';' are
+# comments, repeated keys append (list semantics).  Enabled=y is forced
+# by the driver when not supplied.  The %SANDBOX% variable expands to
+# the generated box name (BoxConfig_<id>), %USER% / %SID% / %SESSION%
+# to the box identity captured at create time.
 
 # --- box roots (the defaults below mirror the classic ini defaults) ---
 FileRootPath=\??\%SystemDrive%\Sandbox\%USER%\%SANDBOX%

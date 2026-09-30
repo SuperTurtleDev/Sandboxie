@@ -1367,7 +1367,8 @@ _FX NTSTATUS Thread_CheckTokenForImpersonation(
     NTSTATUS status;
 
     // OriginalToken BEGIN
-	if (proc->bAppCompartment || Conf_Get_Boolean(proc->box->name, L"OriginalToken", 0, FALSE))
+	// (!Dyndata_Active reproduces the old NoSecurityIsolation fallback)
+	if (!Dyndata_Active || Conf_Get_Boolean(proc->box->name, L"OriginalToken", 0, FALSE))
 		return STATUS_SUCCESS;
 	// OriginalToken END
 	// UnfilteredToken BEGIN

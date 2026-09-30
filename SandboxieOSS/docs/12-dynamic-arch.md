@@ -5,6 +5,66 @@
 
 ---
 
+## 0. 修订：config-to-kernel 定稿（2026-09-30 第二波）
+
+本节覆盖下文与之冲突的旧描述（旧文保留作演进记录）：
+
+1. **驱动零内嵌默认值**。`Conf_InstallEmbeddedSkeleton()` 与
+   `Conf_Skel_*` 静态表已删除——驱动不再编译任何默认 KV 表。
+   `[TemplateDefaultPaths]` / `[TemplateNetworkPaths]` 两个骨架节
+   **随盒走**：`API_BOX_CREATE` 的 blob 为多节 ini 形态，自带
+   `[TemplateDefaultPaths]` + `[TemplateNetworkPaths]` + `[BoxConfig]`，
+   内核解析器（`BoxDyn_LoadConfigText`）三节全写入 `Conf_Data`。
+   未知 `[节名]` → `STATUS_INVALID_PARAMETER`（防注入任意节）。
+   纯平铺 KV（无节头）仍合法 = 全部落盒节（旧单节形态）。
+   模板节重装语义：删旧虚拟节再建（幂等替换）；真实 ini 提供的节
+   不覆盖（ini 优先，同旧骨架语义）；节标记 `from_template`，
+   节枚举继续隐藏。
+2. **三模式标志物理删除**。`use_security_mode` / `use_privacy_mode` /
+   `bAppCompartment` 字段及其全部分支已从驱动移除
+   （process.h/process.c/token.c/thread_token.c/process_low.c/
+   file.c/key.c/process_api.c/process_util.c/ipc.c）。
+   行为全部由盒节纯键表达：
+   - 安全模式 → `SysCallLockDown` / `RestrictDevices` / `DropAdminRights`
+   - 隐私模式 → `WriteFilePath`/`WriteKeyPath`（盘根+注册表用户蜂巢
+     影子）+ `Normal*Path` 白名单 + `UseRuleSpecificity=y`
+   - 应用隔舱 → `OriginalToken` / `NoAddProcessToJob` /
+     `NoSandboxieConsole` / `AlwaysCloseForBoxed=n` / `DontOpenForBoxed=n`
+     / `ProtectHostImages=n` / `Disable{File,Key,Object}Filter=y` / COM 管道键
+   - 旧 `#else`（无 USE_TEMPLATE_PATHS）硬编码路径块随之删除；
+     `restrict_devices` 下盘设备 → normal 无条件执行，隐私影子由
+     KV Write 键覆盖（写列表先于 normal 列表匹配，等长模式写胜）。
+   - Dyndata 缺失回退（原强制 bAppCompartment）改为在
+     OriginalToken / NoAddProcessToJob / NoSandboxieConsole 三个
+     消费点 `|| !Dyndata_Active` 等效表达，字段清零与 MSG_1207 保留。
+   - `SBIE_FLAG_PRIVACY_MODE` / `SBIE_FLAG_APP_COMPARTMENT` 对
+     SbieDll 的导出改为旧键（`UsePrivacyMode` / `NoSecurityIsolation`）
+     纯透传——预设不写这些键，故新体系下两 flag 恒不置位。
+3. **API 权限门（三入口统一）**：`BoxDyn_CheckAccess()` ——
+   提权管理员（UAC 感知：Administrators SID 须 ENABLED 且非
+   deny-only，过滤令牌拒绝）或 SYSTEM（SbieSvc）；
+   其余 `STATUS_ACCESS_DENIED`。沙箱内调用拒绝保留；
+   EXEC/DESTROY 的"创建者或 SbieSvc"检查保留。
+   TODO：SandboxieUsers 组授权（组 SID 查找机制待定）；
+   deploy-rt.bat 已创建该本地组备用。
+4. **预设四件套**：`sbie-cli/v3/examples/{standard,hardened,privacy,appc}.kv`
+   —— 每个都是自完整多节 blob（骨架两节 + 盒节 + 行为键），
+   内容从 `SandboxieOSS/Templates.ini` 对应节提取
+   （privacy 含 186 条 DefaultFolder + PMod 白名单；appc 的骨架节
+   去掉 LanmanRedirector/Mup/ImDiskCtl 三个网络关闭项）。
+5. **SbieSvc 运行时依赖**：`sbie-rt exec` 起手
+   `EnsureSbieSvcRunning()`——SbieSvc 已在跑则直通；否则 SCM
+   `StartService` 优先，失败退 `CreateProcess(DETACHED)` 启动同目录
+   SbieSvc.exe（注意：带 SCM 的系统上裸启 SbieSvc 会在
+   StartServiceCtrlDispatcher 处退出）。部署见 `SandboxieOSS/deploy-rt.bat`
+   （SbieDrv.sys 必须与 SbieDll.dll 同目录：驱动 home =
+   SbieDrv.sys ImagePath 目录；SbieLow 内嵌于 SbieSvc.exe 资源
+   LOWLEVEL64/32，无独立文件）。
+6. `sbie-rt query TemplateDefaultPaths ...` 现在只在**至少一次
+   create 之后**有值（骨架来自 blob，不再内核自举）。
+
+---
+
 ## 1. 目标与不变量
 
 **目标**：所有沙盒都是动态的——配置在运行时经 API 加载到内核，不再有静态 ini 沙盒。
@@ -24,7 +84,8 @@
    SbieBoxDestroy(handle);                               // 销毁沙盒实例
    ```
    进程退出 → 沙盒自动销毁（最后一个进程归零即 teardown）。
-3. SbieRT 不读任何 ini 文件；骨架两节编译进驱动（嵌入式默认值）。
+3. SbieRT 不读任何 ini 文件；骨架两节随盒 blob 走（见 §0 修订 1，
+   原为"编译进驱动"，已删除）。
 
 **边界**：V2 体系（SandboxieOSS）保留不动；本架构为并行新增，全部落在
 `Sandboxie/core/drv/`（驱动可任意改）+ 一个新的最小测试工具 `sbie-cli/v3/`。
@@ -189,15 +250,13 @@ BoxDyn_Lock）。teardown 删节发生在进程通知回调上下文（PASSIVE_L
   新增 BOX_CREATE/DESTROY 的服务消息**不需要**——CLI/宿主直连 IOCTL 更简
   （与任务书判断一致）。
 
-## 5. 无 ini 化：骨架嵌入（`conf.c`）
+## 5. 无 ini 化：骨架随盒（`box_dynamic.c`，原"骨架嵌入"方案已废弃）
 
-`Conf_InstallEmbeddedSkeleton()`：以静态表（`const WCHAR*` 对数组）形式
-把 `[TemplateDefaultPaths]`（约 200 条 Open/ClosedXxxPath）与
-`[TemplateNetworkPaths]`（19 条网络设备路径）编译进驱动，
-内容与 `SandboxieOSS/Templates.ini` 同源（迁移时手工冻结）。
-`Conf_Init` 在 `Conf_Read(-1)` 之后调用：**按节检查，缺哪节补哪节**
-（Templates.ini 在位且含该节则不覆盖，保证开发机行为不变）。
-SbieRT 部署时干脆不携带任何 ini，内核自举出两节骨架。
+（历史方案——静态表编译进驱动 + `Conf_InstallEmbeddedSkeleton`——
+已被 §0 修订 1 的 config-to-kernel 模型取代并从代码中删除。
+现由 `API_BOX_CREATE` 的多节 blob 直接写入
+`[TemplateDefaultPaths]` / `[TemplateNetworkPaths]` 虚拟节，
+替换语义与 ini 优先规则见 §0。）
 
 ## 6. 文件清单
 
@@ -206,7 +265,7 @@ SbieRT 部署时干脆不携带任何 ini，内核自举出两节骨架。
 | `Sandboxie/core/drv/box_dynamic.c` | 新增 | 动态盒管理：句柄表、三 API handler、自动销毁钩子 |
 | `Sandboxie/core/drv/box_dynamic.h` | 新增 | 对外接口（process.c/driver.c 挂钩用） |
 | `Sandboxie/core/drv/api_defs.h` | 修改 | 枚举末尾 +3 API 码；+3 参数结构 |
-| `Sandboxie/core/drv/conf.c` | 修改 | `Conf_CreateTempSection/AddTempSetting/DeleteTempSection/HasSection`；嵌入式骨架表 + `Conf_InstallEmbeddedSkeleton` |
+| `Sandboxie/core/drv/conf.c` | 修改 | `Conf_CreateTempSection/AddTempSetting/DeleteTempSection/HasSection/MarkSectionTemplate`（嵌入式骨架表已删，见 §0） |
 | `Sandboxie/core/drv/conf.h` | 修改 | 上述导出声明 |
 | `Sandboxie/core/drv/process.c` | 修改 | `Process_Delete`/`Process_NotifyProcess_Delete` 各 +1 行钩子 |
 | `Sandboxie/core/drv/driver.c` | 修改 | `DriverEntry` + `BoxDynamic_Init()`；卸载 + `BoxDynamic_Unload()` |
@@ -216,14 +275,14 @@ SbieRT 部署时干脆不携带任何 ini，内核自举出两节骨架。
 | `SandboxieOSS/SandboxieOSS.sln` | 修改 | 挂入 sbie-rt 工程 |
 | 本文档 | 新增 | 架构定稿 |
 
-## 7. 安全模型（原型级，冻结为契约）
+## 7. 安全模型（§0 修订 3 生效）
 
 | API | 授权 |
 |---|---|
-| BOX_CREATE | 任何**非沙盒**进程 |
-| BOX_EXEC / BOX_DESTROY | 创建者进程 或 SbieSvc（`Api_ServiceProcessId`） |
+| BOX_CREATE | 非沙盒进程 + 提权管理员（UAC 感知）/ SYSTEM |
+| BOX_EXEC / BOX_DESTROY | 同上，且创建者进程 或 SbieSvc（`Api_ServiceProcessId`） |
 
-生产化前建议（未做，见遗留）：CREATE 收敛到 session leader / 服务；
+生产化前建议（未做，见遗留）：SandboxieUsers 组授权；
 句柄加 nonce 混淆；blob 大小上限已在实现中（64KB）。
 
 ## 8. 遗留 / 已知边界
@@ -243,30 +302,34 @@ SbieRT 部署时干脆不携带任何 ini，内核自举出两节骨架。
 
 ## 9. 实机验证（ValidationOS 部署与测试序列）
 
-部署（ValidationOS，测试签发，不覆盖生产驱动路径）：
+部署（ValidationOS，测试签发，不覆盖生产驱动路径；一键staging：
+开发机跑 `SandboxieOSS\deploy-rt.bat` 产 `dist\sbie-rt\`，整目录拷去）：
 
 ```bat
-:: 1) 构建产物
+:: 1) 构建产物（= deploy-rt.bat 的 staging 目录内容）
 ::    Sandboxie\Bin\x64\SbieRelease\SbieDrv.sys          （含动态盒 API）
 ::    SandboxieOSS\x64\Release\sbie-rt.exe               （测试工具）
-::    + 既有 SbieSvc/SbieDll/SbieLow 运行时组件（EXEC 注入依赖，见 §8.1）
+::    + SbieSvc.exe/SbieDll.dll/32\对、KmdUtil、服务 stub、VC 运行库
+::      （EXEC 注入依赖见 §8.1；SbieLow 内嵌于 SbieSvc.exe 资源）
 
 :: 2) 目标机启用测试签名后加载驱动
 bcdedit /set testsigning on
 sc create SbieDrv type= kernel binPath= "C:\SbieRT\SbieDrv.sys"
 sc start SbieDrv
 
-:: 3) 无 ini 启动验证（内核自举骨架两节）
+:: 3) 无 ini 启动验证（注意：骨架两节随盒 blob，create 后才可查）
 sbie-rt drv
+sbie-rt create C:\SbieRT\examples\standard.kv
 sbie-rt query TemplateDefaultPaths OpenIpcPath   -> \Windows\ApiPort
 sbie-rt query TemplateNetworkPaths OpenFilePath  -> \Device\NamedPipe\ROUTER
+sbie-rt destroy <handle>
 ```
 
 动态盒生命周期测试：
 
 ```bat
-:: create: 配置进内核，拿句柄
-sbie-rt create C:\SbieRT\dynamic-box.kv
+:: create: 配置进内核，拿句柄（预设：standard/hardened/privacy/appc.kv）
+sbie-rt create C:\SbieRT\examples\dynamic-box.kv
 ::   -> handle 0x1 / box BoxConfig_1
 sbie-rt query BoxConfig_1 FileRootPath           -> 展开后的路径
 sbie-rt query BoxConfig_1 Enabled                -> y
@@ -292,9 +355,25 @@ sbie-rt query BoxConfig_1 FileRootPath           -> <unset>（节已删）
 - `sbie-rt query`：对生产驱动的 `TemplateDefaultPaths`/`TemplateNetworkPaths`
   实读成功（IOCTL 管道、UNICODE_STRING64 读写正确）；
 - `sbie-rt create` 对老驱动返回 `0xC0000010`（未注册 API 码的预期行为）；
-- 驱动整体编译零告警（`/W4` + WX，SbieRelease x64，WDK 26100）；
+- 驱动整体编译零告警（`/W4`，SbieRelease x64，WDK 26100）；
 - 用户态单元测试 `v3\test_conf_crud.exe`：23/23 PASS（KV 语法 10 +
   临时节 CRUD/重载保号 13）。
+
+第二波（config-to-kernel 定稿，2026-09-30）追加验证：
+
+- 驱动 `/t:Rebuild` 全量重建绿；唯一 warning 为 msgs\Parse 工具链的
+  D9025 命令行宏覆盖（既有、非驱动源码）——驱动源码零 C4xxx；
+- grep 零残留：`use_security_mode` / `use_privacy_mode` /
+  `bAppCompartment` / `Conf_InstallEmbeddedSkeleton` / `Conf_Skel_*`
+  在 `core/drv/*.{c,h}` 全灭；
+- `sbie-rt create`（新构建）对老驱动：五个 kv
+  （standard/hardened/privacy/appc/dynamic-box）全部按预期
+  `0xC0000010` 拒绝——文件读取、编码转换、IOCTL 通路正确；
+- kv 静态校验：节名白名单全合规、每行 `Key=非空值`、全 ASCII、
+  体积 ≤ 21110 字节（uni.Length uint16 上限 65535 字节 = 32767 字符内）；
+- `deploy-rt.bat` staging 成功：22 文件（SbieDrv.sys 与 SbieDll.dll
+  同目录、32\ 对、examples\5 kv、MANIFEST.txt），本地组 SandboxieUsers
+  已创建。
 
 遗留：SbieDrv.sys 含动态 API 的实机加载与 exec 全链路（注入→SbieDll
 自举→退出自动销毁）待 ValidationOS VM 部署执行（本机生产驱动不可替换）。

@@ -555,7 +555,7 @@ _FX void *Token_FilterPrimary(PROCESS *proc, void *ProcessObject)
 
     // DbgPrint("   Process Token %08X - %d <%S>\n", PrimaryToken, proc->pid, proc->image_name);
 
-    proc->drop_rights = proc->use_security_mode || Process_GetConf_bool(proc, L"DropAdminRights", FALSE);
+    proc->drop_rights = Process_GetConf_bool(proc, L"DropAdminRights", FALSE);
 
     DropRights = (proc->drop_rights ? -1 : 0);
 
@@ -1709,7 +1709,9 @@ _FX BOOLEAN Token_ReplacePrimary(PROCESS *proc)
     BOOLEAN ok = FALSE;
 
 	// OriginalToken BEGIN
-	if (proc->bAppCompartment || Conf_Get_Boolean(proc->box->name, L"OriginalToken", 0, FALSE))
+	// (!Dyndata_Active reproduces the old NoSecurityIsolation fallback: with
+	// no dyndata the driver cannot filter the token, so keep the original)
+	if (!Dyndata_Active || Conf_Get_Boolean(proc->box->name, L"OriginalToken", 0, FALSE))
 		return TRUE;
 	// OriginalToken END
 

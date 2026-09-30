@@ -1744,11 +1744,11 @@ _FX NTSTATUS Conf_Api_Reload(PROCESS *proc, ULONG64 *parms)
     }
 
     //
-    // keep the embedded skeleton invariant across reloads (a reload that
-    // reset the configuration drops everything, including the skeleton)
+    // (dynamic-box-arch) no embedded skeleton to reinstall after a reload:
+    // the [TemplateDefaultPaths] / [TemplateNetworkPaths] sections are part
+    // of each dynamic box's own blob; a reload that resets the configuration
+    // drops them and the next API_BOX_CREATE brings them back
     //
-
-    Conf_InstallEmbeddedSkeleton();
 
     //
     // Check the reconfigure drier flag and if its set, load/unload the components accordingly
@@ -2390,309 +2390,45 @@ _FX BOOLEAN Conf_HasSection(const WCHAR *section_name)
 }
 
 
-//---------------------------------------------------------------------------
-// Embedded configuration skeleton (no-ini operation, dynamic-box-arch)
+//-----------------------------------------------------------------------------------
+// Conf_MarkSectionTemplate  (dynamic-box-arch)
 //---------------------------------------------------------------------------
 //
-// The two global skeleton sections from Templates.ini, compiled into the
-// driver as a frozen snapshot, so a runtime deployment (SbieRT) needs no
-// Templates.ini at all.  Installed only when the section is absent, so a
-// real Templates.ini (development machines) still wins.
+// Mark a temp section as template-origin so section enumeration
+// (Conf_Get_Section_Name) keeps hiding it, matching the behavior template
+// sections have when loaded from Templates.ini.
 //
-
-
-static const WCHAR *Conf_Skel_DefaultPaths[] = {
-    L"OpenKeyPath=\\REGISTRY\\A\\*",
-    L"OpenFilePath=\\Device\\NamedPipe\\",
-    L"OpenFilePath=\\Device\\MailSlot\\",
-    L"OpenFilePath=\\Device\\NamedPipe\\ProtectedPrefix\\LocalService\\FTHPIPE",
-    L"OpenFilePath=\\Device\\NamedPipe\\spoolss",
-    L"OpenFilePath=\\Device\\NamedPipe\\spooler*",
-    L"OpenFilePath=%DefaultSpoolDirectory%\\*",
-    L"OpenFilePath=%DefaultSpoolDirectory2%\\*",
-    L"OpenFilePath=\\Device\\NamedPipe\\*_doPDF*",
-    L"OpenFilePath=\\Device\\NamedPipe\\AudioSrv",
-    L"OpenFilePath=\\Device\\NamedPipe\\Adobe LM Service*",
-    L"OpenFilePath=\\Device\\NamedPipe\\XTIERRPCPIPE",
-    L"ClosedFilePath=\\Device\\LanmanRedirector",
-    L"ClosedFilePath=\\Device\\Mup",
-    L"ClosedFilePath=\\Device\\ImDiskCtl",
-    L"OpenIpcPath=\\Windows\\ApiPort",
-    L"OpenIpcPath=\\Sessions\\*\\Windows\\ApiPort",
-    L"OpenIpcPath=\\Sessions\\*\\Windows\\SharedSection",
-    L"OpenIpcPath=\\Windows\\SharedSection",
-    L"OpenIpcPath=\\Sessions\\*\\BaseNamedObjects\\CrSharedMem_*",
-    L"OpenIpcPath=\\ThemeApiPort",
-    L"OpenIpcPath=\\KnownDlls\\*",
-    L"OpenIpcPath=\\KnownDlls32\\*",
-    L"OpenIpcPath=\\KnownDllsChpe32\\*",
-    L"OpenIpcPath=\\NLS\\*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ShimCacheMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ShimSharedMemory",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\SHIMLIB_LOG_MUTEX",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\msgina: ReturnToWelcome",
-    L"OpenIpcPath=\\Security\\LSA_AUTHENTICATION_INITIALIZED",
-    L"OpenIpcPath=\\LsaAuthenticationPort",
-    L"OpenIpcPath=\\NlsCacheMutant",
-    L"OpenIpcPath=\\KernelObjects\\*",
-    L"OpenIpcPath=\\NLAPublicPort",
-    L"OpenIpcPath=\\RPC Control\\nlaapi",
-    L"OpenIpcPath=\\RPC Control\\tapsrvlpc",
-    L"OpenIpcPath=\\RPC Control\\senssvc",
-    L"OpenIpcPath=\\RPC Control\\samss lpc",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\SENS Information Cache",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\TabletHardwarePresent",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\userenv: * Group Policy has been applied",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\TermSrvReadyEvent",
-    L"OpenIpcPath=\\RPC Control\\dhcpcsvc",
-    L"OpenIpcPath=\\RPC Control\\dhcpcsvc6",
-    L"OpenIpcPath=\\RPC Control\\DNSResolver",
-    L"OpenIpcPath=\\RPC Control\\RasmanRpc",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WininetStartupMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WininetConnectionMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WininetProxyRegistryMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\RasPbFile",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\CTF.*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\MSCTF.*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\MSUIM.*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\CtfmonInstMutex*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\CiceroSharedMemDefault*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\CicLoadWinStaWinSta*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DBWinMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DBWIN_BUFFER",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DBWIN_BUFFER_READY",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DBWIN_DATA_READY",
-    L"OpenIpcPath=\\RPC Control\\AudioSrv",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\mmGlobalPnpInfo",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\Guard*mmGlobalPnpInfoGuard",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\MidiMapper_modLongMessage_RefCnt",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\MidiMapper_Configure",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\SsiMidiDllCs",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\StaccatoSynthCore11Mutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WDMAUD_Callbacks",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DirectSound*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\AMResourceMutex*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\AMResourceMapping*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\VideoRenderer",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\VIDEOMEMORY",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\mxrapi",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\mixercallback",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\hardwaremixercallback",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DINPUTWINMM",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DDrawDriverObjectListMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\__DDrawExclMode__",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\__DDrawCheckExclMode__",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DDrawWindowListMutex",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DDrawCheckFullscreenSemaphore",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\D3D9CheckFullscreenSemaphore",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WinMMConsoleAudioEvent",
-    L"OpenIpcPath=\\MmcssApiPort",
-    L"OpenIpcPath=\\RPC Control\\AudioClientRpc",
-    L"OpenIpcPath=\\RPC Control\\MidiSrvClientRpc",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\SYSTEM_AUDIO_STREAM_*",
-    L"OpenIpcPath=\\UxSmsApiPort",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\Dwm-*-ApiPort-*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DwmDxBltEvent*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\AudioEngineDuplicateHandleApiPort*",
-    L"OpenIpcPath=\\RPC Control\\NCWTSAudioServer",
-    L"OpenIpcPath=\\RPC Control\\spoolss",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\EPSON-PrgMtr-*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\RouterPreInitEvent",
-    L"OpenIpcPath=\\RPC Control\\SbieSvcPort",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\Sandboxie_StartMenu_WorkArea_*",
-    L"OpenIpcPath=\\...\\*",
-    L"OpenIpcPath=\\RPC Control\\SLCTransportEndpoint-*",
-    L"OpenIpcPath=\\RPC Control\\wpcsvc",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\BFE_Notify_Event_*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WinSpl64To32Mutex*_0",
-    L"OpenIpcPath=\\RPC Control\\splwow64_*_0",
-    L"OpenIpcPath=\\RPC Control\\umpdproxy_*_0",
-    L"OpenIpcPath=\\ConsoleEvent-0x*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ConsoleEvent-0x*",
-    L"OpenIpcPath=\\RPC Control\\console-0x*-lpc-handle",
-    L"OpenIpcPath=\\RPC Control\\ConsoleEvent-0x*",
-    L"OpenIpcPath=\\RPC Control\\ConsoleLPC-0x*",
-    L"OpenIpcPath=\\RPC Control\\lsapolicylookup",
-    L"OpenIpcPath=\\RPC Control\\lsasspirpc",
-    L"OpenIpcPath=\\RPC Control\\LSARPC_ENDPOINT",
-    L"OpenIpcPath=\\RPC Control\\umpo",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\FlipEx*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\FontCachePort",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\FntCache-*",
-    L"OpenIpcPath=\\Windows\\Theme*",
-    L"OpenIpcPath=\\Sessions\\*\\Windows\\Theme*",
-    L"OpenIpcPath=\\Sessions\\*\\Windows\\DwmApiPort",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\DWM_DX_FULLSCREEN_TRANSITION_EVENT",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WinSpl64To32Mutex*_2000",
-    L"OpenIpcPath=\\RPC Control\\splwow64_*_2000",
-    L"OpenIpcPath=\\RPC Control\\umpdproxy_*_2000",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\CoreMessagingRegistrar",
-    L"OpenIpcPath=*\\BaseNamedObjects\\[CoreUI]-*",
-    L"OpenIpcPath=*\\BaseNamedObjects\\SM*:WilStaging_*",
-    L"OpenIpcPath=\\{BEC19D6F-D7B2-41A8-860C-8787BB964F2D}",
-    L"ReadIpcPath=\\??\\pipe\\*",
-    L"ReadIpcPath=$:explorer.exe",
-    L"OpenWinClass=Shell_TrayWnd",
-    L"OpenWinClass=TrayNotifyWnd",
-    L"OpenWinClass=SystemTray_Main",
-    L"OpenWinClass=Connections Tray",
-    L"OpenWinClass=MS_WebcheckMonitor",
-    L"OpenWinClass=PrintTray_Notify_WndClass",
-    L"OpenWinClass=CicLoaderWndClass",
-    L"OpenWinClass=CicMarshalWndClass",
-    L"OpenWinClass=Credential Dialog Xaml Host",
-    L"OpenWinClass=Sandbox:*:ConsoleWindowClass",
-    L"OpenWinClass=MSTaskSwWClass",
-    L"OpenWinClass=MicrosoftWindowsTooltip",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ATITRAY_SMEM",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ATITRAY_OSDM",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\AMCreateListenSock*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\AMIPC_*",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\devldr32",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\ThreatfireApiHookIpc2Map",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\00MemoryShareKeyloggerHunter",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WacomNewFrontAppEventName",
-    L"OpenIpcPath=*\\BaseNamedObjects*\\WacomTouchingAppNameMutexName",
-    L"OpenWinClass=CTouchPadSynchronizer",
-    L"OpenWinClass=Type32_Main_Window",
-    L"OpenWinClass=TForm_AshampooFirewall",
-    L"OpenWinClass=WinVNC desktop sink",
-    L"OpenWinClass=Afx:400000:0",
-    L"OpenWinClass=NVIDIA TwinView Window",
-    L"OpenWinClass=SWFlash_PlaceHolderX",
-    L"OpenWinClass=MdiClass",
-    L"OpenWinClass=Logitech Wingman Internal Message Router",
-    L"OpenWinClass=devldr",
-    L"OpenWinClass=vmware.exe,MKSEmbedded",
-    NULL
-};
-
-static const WCHAR *Conf_Skel_NetworkPaths[] = {
-    L"OpenFilePath=\\Device\\NamedPipe\\ROUTER",
-    L"OpenFilePath=\\Device\\NamedPipe\\ShimViewer",
-    L"OpenFilePath=\\Device\\Afd",
-    L"OpenFilePath=\\Device\\Afd\\Endpoint",
-    L"OpenFilePath=\\Device\\Afd\\AsyncConnectHlp",
-    L"OpenFilePath=\\Device\\Afd\\AsyncSelectHlp",
-    L"OpenFilePath=\\Device\\Afd\\ROUTER",
-    L"OpenFilePath=\\Device\\Afd\\Mio",
-    L"OpenFilePath=\\Device\\WS2IFSL",
-    L"OpenFilePath=\\Device\\WS2IFSL\\NifsPvd",
-    L"OpenFilePath=\\Device\\WS2IFSL\\NifsSct",
-    L"OpenFilePath=\\Device\\Tcp",
-    L"OpenFilePath=\\Device\\Tcp6",
-    L"OpenFilePath=\\Device\\Ip",
-    L"OpenFilePath=\\Device\\Ip6",
-    L"OpenFilePath=\\Device\\Udp",
-    L"OpenFilePath=\\Device\\Udp6",
-    L"OpenFilePath=\\Device\\RawIp",
-    L"OpenFilePath=\\Device\\RawIp6",
-    L"OpenFilePath=\\Device\\NetBT_Tcpip_*",
-    L"OpenFilePath=\\Device\\Http\\*",
-    L"OpenFilePath=\\Device\\Nsi",
-    L"ClosedFilePath=\\Device\\afd*",
-    L"ClosedFilePath=\\Device\\ip",
-    L"ClosedFilePath=\\Device\\ip6",
-    L"ClosedFilePath=\\Device\\udp",
-    L"ClosedFilePath=\\Device\\udp6",
-    L"ClosedFilePath=\\Device\\tcp",
-    L"ClosedFilePath=\\Device\\tcp6",
-    L"ClosedFilePath=\\Device\\http\\*",
-    L"ClosedFilePath=\\Device\\rawip",
-    L"ClosedFilePath=\\Device\\rawip6",
-    L"ClosedFilePath=\\Device\\nsi",
-    NULL
-};
-
-
-//---------------------------------------------------------------------------
-// Conf_InstallEmbeddedSkeleton
+// (dynamic-box-arch) the driver embeds NO default configuration tables:
+// the [TemplateDefaultPaths] / [TemplateNetworkPaths] skeleton sections
+// arrive per box through the API_BOX_CREATE blob (see box_dynamic.c).
 //---------------------------------------------------------------------------
 
 
-_FX BOOLEAN Conf_InstallEmbeddedSkeleton(void)
+_FX NTSTATUS Conf_MarkSectionTemplate(const WCHAR *section_name)
 {
-    static const WCHAR *_SkelDefaultPaths = L"TemplateDefaultPaths";
-    static const WCHAR *_SkelNetworkPaths = L"TemplateNetworkPaths";
+    NTSTATUS status;
+    KIRQL irql;
+    CONF_SECTION *section;
 
-    const struct {
+    KeRaiseIrql(APC_LEVEL, &irql);
+    ExAcquireResourceExclusiveLite(Conf_Lock, TRUE);
 
-        const WCHAR *section_name;
-        const WCHAR **entries;
+    section = Conf_Find_Sections(&Conf_Data, section_name);
 
-    } tables[2] = {
-        { _SkelDefaultPaths, Conf_Skel_DefaultPaths },
-        { _SkelNetworkPaths, Conf_Skel_NetworkPaths },
-    };
-
-    ULONG i;
-
-    for (i = 0; i < 2; ++i) {
-
-        NTSTATUS status;
-        const WCHAR **entry;
-        WCHAR *line;
-        WCHAR *ptr;
-
-        if (Conf_HasSection(tables[i].section_name))
-            continue;   // provided by an ini file (or already installed)
-
-        status = Conf_CreateTempSection(tables[i].section_name);
-        if (! NT_SUCCESS(status))
-            return FALSE;
-
-        //
-        // mark the skeleton as template-origin so section enumeration
-        // (Conf_Get_Section_Name) keeps hiding it, matching the behavior
-        // these sections have when loaded from Templates.ini
-        //
-
-        {
-            KIRQL irql;
-            KeRaiseIrql(APC_LEVEL, &irql);
-            ExAcquireResourceExclusiveLite(Conf_Lock, TRUE);
-            {
-                CONF_SECTION *section = Conf_Find_Sections(
-                    &Conf_Data, tables[i].section_name);
-                if (section)
-                    section->from_template = TRUE;
-            }
-            ExReleaseResourceLite(Conf_Lock);
-            KeLowerIrql(irql);
-        }
-
-        //
-        // add each "Key=Value" line from the compiled-in table
-        //
-
-        for (entry = tables[i].entries; entry && *entry; ++entry) {
-
-            line = (WCHAR *)Mem_Alloc(Driver_Pool, CONF_LINE_LEN * sizeof(WCHAR));
-            if (! line)
-                return FALSE;
-
-            wmemzero(line, CONF_LINE_LEN);
-            wcsncpy(line, *entry, CONF_LINE_LEN - 2);
-
-            ptr = wcschr(line, L'=');
-            if ((! ptr) || ptr == line) {
-                Mem_Free(line, CONF_LINE_LEN * sizeof(WCHAR));
-                continue;
-            }
-            *ptr = L'\0';
-
-            status = Conf_AddTempSetting(
-                tables[i].section_name, line, ptr + 1);
-
-            Mem_Free(line, CONF_LINE_LEN * sizeof(WCHAR));
-
-            if (! NT_SUCCESS(status))
-                return FALSE;
-        }
+    if (! section)
+        status = STATUS_OBJECT_NAME_NOT_FOUND;
+    else {
+        section->from_template = TRUE;
+        status = STATUS_SUCCESS;
     }
 
-    return TRUE;
+    ExReleaseResourceLite(Conf_Lock);
+    KeLowerIrql(irql);
+
+    return status;
 }
+
+
 
 
 //---------------------------------------------------------------------------
@@ -2722,12 +2458,10 @@ _FX BOOLEAN Conf_Init(void)
     Conf_Read(-1);
 
     //
-    // install the compiled-in skeleton sections when the ini files did
-    // not provide them (dynamic-box-arch: no-ini operation)
+    // (dynamic-box-arch) no embedded skeleton:  the configuration is fully
+    // caller-provided; dynamic boxes carry their own template sections in
+    // the API_BOX_CREATE blob
     //
-
-    if (! Conf_InstallEmbeddedSkeleton())
-        return FALSE;
 
     //
     // set API functions

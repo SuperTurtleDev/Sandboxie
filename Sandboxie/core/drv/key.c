@@ -244,29 +244,9 @@ _FX BOOLEAN Key_InitProcess(PROCESS *proc)
     static const WCHAR *_ReadPath = L"ReadKeyPath";
     static const WCHAR *_WritePath = L"WriteKeyPath";
 
-#ifndef USE_TEMPLATE_PATHS
-#ifdef USE_MATCH_PATH_EX
-    static const WCHAR *normalpaths[] = {
-        NULL
-    };
-    static const WCHAR *writepaths[] = {
-        L"\\REGISTRY\\USER\\*",
-        NULL
-    };
-#endif
-    static const WCHAR *openkeys[] = {
-        // Application Hives
-        // https://docs.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regloadappkeya
-        // https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/filtering-registry-operations-on-application-hives
-        L"\\REGISTRY\\A\\*", 
-        NULL
-    };
-#endif
-
     BOOLEAN ok;
 
 #ifdef USE_MATCH_PATH_EX
-    ULONG i;
 
     //
     // normal paths
@@ -274,17 +254,7 @@ _FX BOOLEAN Key_InitProcess(PROCESS *proc)
 
     ok = Process_GetPaths(proc, &proc->normal_key_paths, proc->box->name, _NormalPath, TRUE);
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok) 
-        ok = Process_GetTemplatePaths(proc, &proc->normal_key_paths, _NormalPath);
-#else
-    if (ok && proc->use_privacy_mode) {
-        for (i = 0; normalpaths[i] && ok; ++i) {
-            ok = Process_AddPath(proc, &proc->normal_key_paths, NULL, 
-                                    TRUE, normalpaths[i], FALSE);
-        }
-    }
-#endif
+    ok = Process_GetTemplatePaths(proc, &proc->normal_key_paths, _NormalPath);
 
     if (!ok) {
         Log_MsgP1(MSG_INIT_PATHS, _NormalPath, proc->pid);
@@ -308,15 +278,7 @@ _FX BOOLEAN Key_InitProcess(PROCESS *proc)
 
     }
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, &proc->open_key_paths, _OpenPath);
-#else
-    for (i = 0; openkeys[i] && ok; ++i) {
-        ok = Process_AddPath(
-            proc, &proc->open_key_paths, NULL, TRUE, openkeys[i], FALSE);
-    }
-#endif
+    ok = Process_GetTemplatePaths(proc, &proc->open_key_paths, _OpenPath);
 
     if (! ok) {
         Log_MsgP1(MSG_INIT_PATHS, _OpenPath, proc->pid);
@@ -366,17 +328,13 @@ _FX BOOLEAN Key_InitProcess(PROCESS *proc)
 #ifdef USE_MATCH_PATH_EX
     ok = Process_GetPaths(proc, &proc->write_key_paths, proc->box->name, _WritePath, TRUE);
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, &proc->write_key_paths, _WritePath);
-#else
-    if (ok && proc->use_privacy_mode) {
-        for (i = 0; writepaths[i] && ok; ++i) {
-            ok = Process_AddPath(proc, &proc->write_key_paths, NULL, 
-                                    TRUE, writepaths[i], FALSE);
-        }
-    }
-#endif
+    ok = Process_GetTemplatePaths(proc, &proc->write_key_paths, _WritePath);
+
+    //
+    // (dynamic-box-arch) privacy boxes write WriteKeyPath=\REGISTRY\USER\*
+    // (and the matching NormalKeyPath whitelists) into the box section; the
+    // old UsePrivacyMode-driven shortcut is gone.
+    //
 
 #else
     ok = Process_GetPaths2(

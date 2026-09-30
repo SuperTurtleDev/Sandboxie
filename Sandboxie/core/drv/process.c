@@ -744,22 +744,28 @@ _FX PROCESS *Process_Create(
     //
     // initialize box options
     //
-
-    proc->bAppCompartment = Conf_Get_Boolean(proc->box->name, L"NoSecurityIsolation", 0, FALSE);
+    // (dynamic-box-arch) the three legacy mode flags -- UseSecurityMode /
+    // UsePrivacyMode / NoSecurityIsolation -- no longer exist in the driver.
+    // Every behavior is keyed directly in the box section:
+    //   security mode  ->  SysCallLockDown / RestrictDevices / DropAdminRights
+    //   privacy mode   ->  WriteFilePath / WriteKeyPath (+ UseRuleSpecificity)
+    //   app compartment -> OriginalToken / NoAddProcessToJob / ... (token.c,
+    //                      process_low.c) and the box's own path keys
+    //
 
     //
     // by default, Close[...]=!<program>,path includes all boxed images
     // use AlwaysCloseForBoxed=n to disable this behaviour
     //
 
-    proc->always_close_for_boxed = !proc->bAppCompartment && Conf_Get_Boolean(proc->box->name, L"AlwaysCloseForBoxed", 0, TRUE); 
+    proc->always_close_for_boxed = Conf_Get_Boolean(proc->box->name, L"AlwaysCloseForBoxed", 0, TRUE);
 
     //
     // by default OpenFile and OpenKey apply only to unboxed processes
     // use DontOpenForBoxed=n to thread boxed and unboxed programs the same way
     //
 
-    proc->dont_open_for_boxed = !proc->bAppCompartment && Conf_Get_Boolean(proc->box->name, L"DontOpenForBoxed", 0, TRUE); 
+    proc->dont_open_for_boxed = Conf_Get_Boolean(proc->box->name, L"DontOpenForBoxed", 0, TRUE);
 
     //
     // Sandboxie attempts to protect per process rules by allowing them only for host binaries
@@ -767,34 +773,30 @@ _FX PROCESS *Process_Create(
     // with this option we can prevent that
     //
 
-    proc->protect_host_images = !proc->bAppCompartment && Conf_Get_Boolean(proc->box->name, L"ProtectHostImages", 0, FALSE); 
+    proc->protect_host_images = Conf_Get_Boolean(proc->box->name, L"ProtectHostImages", 0, FALSE);
 
-    //
-    // privacy mode requirers Rule Specificity
-    //
-
-    proc->use_security_mode = Conf_Get_Boolean(proc->box->name, L"UseSecurityMode", 0, FALSE);
-    proc->is_locked_down = proc->use_security_mode || Conf_Get_Boolean(proc->box->name, L"SysCallLockDown", 0, FALSE);
+    proc->is_locked_down = Conf_Get_Boolean(proc->box->name, L"SysCallLockDown", 0, FALSE);
     proc->open_all_nt = Conf_Get_Boolean(proc->box->name, L"OpenAllSysCalls", 0, FALSE);
 #ifdef USE_MATCH_PATH_EX
-    proc->restrict_devices = proc->use_security_mode || Conf_Get_Boolean(proc->box->name, L"RestrictDevices", 0, FALSE);
+    proc->restrict_devices = Conf_Get_Boolean(proc->box->name, L"RestrictDevices", 0, FALSE);
 
-    proc->use_privacy_mode = Conf_Get_Boolean(proc->box->name, L"UsePrivacyMode", 0, FALSE); 
-    proc->use_rule_specificity = proc->restrict_devices || proc->use_privacy_mode || Conf_Get_Boolean(proc->box->name, L"UseRuleSpecificity", 0, FALSE); 
+    proc->use_rule_specificity = proc->restrict_devices || Conf_Get_Boolean(proc->box->name, L"UseRuleSpecificity", 0, FALSE);
 #endif
     proc->confidential_box = Conf_Get_Boolean(proc->box->name, L"ConfidentialBox", 0, FALSE);
 
     //
-    // If we don't have valid Dyndata, we force NoSecurityIsolation=y on all boxes
+    // If we don't have valid Dyndata, we can't provide secure token filtering:
+    // fall back to the compartment-style behavior through the plain behavior
+    // keys' call sites (OriginalToken in token.c / thread_token.c, job skip
+    // below in Process_NotifyProcess_Create, console skip in process_low.c)
     // and issue a security warning MSG_1207
     //
 
-    if (!Dyndata_Active && !proc->bAppCompartment) {
+    if (!Dyndata_Active) {
 
-        proc->bAppCompartment = TRUE;
-		proc->always_close_for_boxed = FALSE;
-		proc->dont_open_for_boxed = FALSE;
-		proc->protect_host_images = FALSE;
+        proc->always_close_for_boxed = FALSE;
+        proc->dont_open_for_boxed = FALSE;
+        proc->protect_host_images = FALSE;
 
         WCHAR info[12];
         RtlStringCbPrintfW(info, sizeof(info), L"%d", Driver_OsBuild);
@@ -811,7 +813,7 @@ _FX PROCESS *Process_Create(
     // initialize filtering options
     //
 
-    BOOLEAN no_filtering = proc->bAppCompartment && Conf_Get_Boolean(proc->box->name, L"NoSecurityFiltering", 0, FALSE); // only in effect in app mode
+    BOOLEAN no_filtering = Conf_Get_Boolean(proc->box->name, L"NoSecurityFiltering", 0, FALSE);
     proc->disable_file_flt = no_filtering || Conf_Get_Boolean(proc->box->name, L"DisableFileFilter", 0, FALSE);
     proc->disable_key_flt = no_filtering || Conf_Get_Boolean(proc->box->name, L"DisableKeyFilter", 0, FALSE);
     proc->disable_object_flt = no_filtering || Conf_Get_Boolean(proc->box->name, L"DisableObjectFilter", 0, FALSE);
@@ -1422,10 +1424,12 @@ _FX BOOLEAN Process_NotifyProcess_Create(
 
                 //
                 // don't put the process into a job if OpenWinClass=*
-                // don't put the process into a job if NoSecurityIsolation=y
+                // don't put the process into a job if NoAddProcessToJob=y
+                // (also forced when Dyndata is unavailable -- see the
+                // compartment-style fallback in Process_Create)
                 //
 
-				if (new_proc->open_all_win_classes || new_proc->bAppCompartment || Conf_Get_Boolean(new_proc->box->name, L"NoAddProcessToJob", 0, FALSE)) {
+				if (new_proc->open_all_win_classes || !Dyndata_Active || Conf_Get_Boolean(new_proc->box->name, L"NoAddProcessToJob", 0, FALSE)) {
 
                     new_proc->can_use_jobs = TRUE;
 					add_process_to_job = FALSE;

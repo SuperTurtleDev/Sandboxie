@@ -164,12 +164,12 @@ NTSTATUS Conf_DeleteTempSection(const WCHAR *section_name);
 
 BOOLEAN Conf_HasSection(const WCHAR *section_name);
 
-// Conf_InstallEmbeddedSkeleton:  ensure the [TemplateDefaultPaths] and
-// [TemplateNetworkPaths] skeleton sections exist in Conf_Data, creating
-// them from compiled-in defaults when absent (no ini file needed).
-// Called from Conf_Init after Conf_Read.
+// Conf_MarkSectionTemplate:  flag a temp section as template-origin so
+// section enumeration (Conf_Get_Section_Name) keeps hiding it, like a
+// section loaded from Templates.ini.  (dynamic-box-arch) the template
+// sections are supplied per box by API_BOX_CREATE, not embedded.
 
-BOOLEAN Conf_InstallEmbeddedSkeleton(void);
+NTSTATUS Conf_MarkSectionTemplate(const WCHAR *section_name);
 
 
 //---------------------------------------------------------------------------

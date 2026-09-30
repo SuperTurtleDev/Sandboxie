@@ -31,6 +31,7 @@
 #include "ipc.h"
 #include "thread.h"
 #include "session.h"
+#include "dyn_data.h"
 #include "common/pattern.h"
 #include "common/my_version.h"
 
@@ -407,9 +408,13 @@ _FX NTSTATUS Process_Api_QueryInfo(PROCESS *proc, ULONG64 *parms)
 
                 if (proc->use_rule_specificity)
                     flags |= SBIE_FLAG_RULE_SPECIFICITY;
-                if (proc->use_privacy_mode)
+                // (dynamic-box-arch) the mode flags no longer exist in the
+                // driver; the two SbieDll indicators remain pure passthroughs
+                // of the legacy keys so old ini boxes keep their user-mode
+                // behavior.  Presets never write these keys.
+                if (Conf_Get_Boolean(proc->box->name, L"UsePrivacyMode", 0, FALSE))
                     flags |= SBIE_FLAG_PRIVACY_MODE;
-                if (proc->bAppCompartment)
+                if (!Dyndata_Active || Conf_Get_Boolean(proc->box->name, L"NoSecurityIsolation", 0, FALSE))
                     flags |= SBIE_FLAG_APP_COMPARTMENT;
             }
             else

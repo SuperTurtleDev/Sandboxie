@@ -570,120 +570,6 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
     static const WCHAR *_ReadPath = L"ReadFilePath";
     static const WCHAR *_WritePath = L"WriteFilePath";
 
-#ifndef USE_TEMPLATE_PATHS
-#ifdef USE_MATCH_PATH_EX
-    static const WCHAR *normalpaths[] = {
-        L"%SystemRoot%\\*",
-        L"%SbieHome%\\*",
-        L"%ProgramFiles%\\*",
-        L"%ProgramFiles% (x86)\\*",
-        NULL
-    };
-#endif
-    static const WCHAR *openpipes[] = {
-        L"\\Device\\NamedPipe\\",               // named pipe root
-        L"\\Device\\MailSlot\\",                // mail slot root
-        //
-        // Windows 7 fault-tolerant heap
-        //
-        L"\\Device\\NamedPipe\\ProtectedPrefix\\LocalService\\FTHPIPE",
-        //
-        // printer
-        //
-        L"\\Device\\NamedPipe\\spoolss",
-        L"\\Device\\NamedPipe\\spooler*",
-        L"%DefaultSpoolDirectory%\\*",
-        L"%DefaultSpoolDirectory2%\\*",
-        L"\\Device\\NamedPipe\\*_doPDF*",           // doPDF
-        //
-        // multimedia
-        //
-        L"\\Device\\NamedPipe\\AudioSrv",
-        //
-        // third-party software
-        //
-        L"\\Device\\NamedPipe\\Adobe LM Service*",
-        L"\\Device\\NamedPipe\\XTIERRPCPIPE",       // Novell NetIdentity
-        NULL
-    };
-    static const WCHAR* openNetPipes[] = {
-        L"\\Device\\NamedPipe\\ROUTER",
-        L"\\Device\\NamedPipe\\ShimViewer",
-        L"\\Device\\Afd",
-        L"\\Device\\Afd\\Endpoint",
-        L"\\Device\\Afd\\AsyncConnectHlp",
-        L"\\Device\\Afd\\AsyncSelectHlp",
-        L"\\Device\\Afd\\ROUTER",
-        L"\\Device\\Afd\\Mio",
-        L"\\Device\\WS2IFSL",
-        L"\\Device\\WS2IFSL\\NifsPvd",
-        L"\\Device\\WS2IFSL\\NifsSct",
-        L"\\Device\\Tcp",
-        L"\\Device\\Tcp6",
-        L"\\Device\\Ip",
-        L"\\Device\\Ip6",
-        L"\\Device\\Udp",
-        L"\\Device\\Udp6",
-        L"\\Device\\RawIp",
-        L"\\Device\\RawIp6",
-        L"\\Device\\NetBT_Tcpip_*",
-        L"\\Device\\Http\\*",
-        L"\\Device\\Nsi",                           // Windows 7
-        NULL
-    };
-    static const WCHAR* closedNetPipes[] = {
-        L"\\Device\\afd*",
-        L"\\Device\\ip",
-        L"\\Device\\ip6",
-        L"\\Device\\udp",
-        L"\\Device\\udp6",
-        L"\\Device\\tcp",
-        L"\\Device\\tcp6",
-        L"\\Device\\http\\*",
-        L"\\Device\\rawip",
-        L"\\Device\\rawip6",
-        L"\\Device\\nsi",                           // Windows 7
-        NULL
-    };
-    static const WCHAR *strWinRMFiles[] = {
-        // Windows Remote Management (WinRM) is a large security hole.  A sandboxed app running in an elevated cmd shell can send any admin command to the host.
-        // Block the WinRS.exe and the automation dlls to make it very difficult for someone to use.
-        // See ICD-10136 "Sandboxie security hole allows guest to run any command in host as admin"
-        //
-        L"%SystemRoot%\\System32\\wsmsvc.dll",
-        L"%SystemRoot%\\System32\\wsmauto.dll",
-        L"%SystemRoot%\\System32\\winrs.exe",
-        // Don't forget the WoW64 files
-        L"%SystemRoot%\\SysWoW64\\wsmsvc.dll",
-        L"%SystemRoot%\\SysWoW64\\wsmauto.dll",
-        L"%SystemRoot%\\SysWoW64\\winrs.exe",
-        // Note: This is not a proper fix, just a cheap mitigation!!!
-        NULL
-    };
-    static const WCHAR* openPipesCM[] = {
-        // open those in compartment mode as do not use the de-administrator-ize proxy in File_NtCreateFilePipe
-        //
-        L"\\device\\*pipe\\lsarpc",
-        L"\\device\\*pipe\\srvsvc",
-        L"\\device\\*pipe\\wkssvc",
-        L"\\device\\*pipe\\samr",
-        L"\\device\\*pipe\\netlogon",
-        NULL
-    };
-    static const WCHAR* approved_devices[] = {
-        L"\\Device\\NamedPipe\\*",
-        L"\\Device\\CNG",
-        L"\\Device\\ConDrv\\*",
-        L"\\Device\\DeviceApi*",
-        L"\\Device\\DfsClient",
-        L"\\Device\\KsecDD",
-        L"\\Device\\MountPointManager",
-        L"\\Device\\Ndis",
-        L"\\Device\\PcwDrv",
-        L"\\Device\\SrpDevice", // Smart App Control
-        NULL
-    };
-#endif
     static const WCHAR* drive_devices[] = {
         L"\\Device\\Floppy*\\*",
         L"\\Device\\CdRom*\\*",
@@ -703,17 +589,7 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
 
     ok = Process_GetPaths(proc, normal_file_paths, proc->box->name, _NormalPath, TRUE);
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, normal_file_paths, _NormalPath);
-#else
-    if (ok && proc->use_privacy_mode) {
-        for (i = 0; normalpaths[i] && ok; ++i) {
-            ok = Process_AddPath(
-                proc, normal_file_paths, NULL, TRUE, normalpaths[i], FALSE);
-        }
-    }
-#endif
+    ok = Process_GetTemplatePaths(proc, normal_file_paths, _NormalPath);
 
     if (! ok) {
         Log_MsgP1(MSG_INIT_PATHS, _NormalPath, proc->pid);
@@ -751,27 +627,11 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
     //            proc, open_file_paths, NULL, TRUE, _PstPipe, FALSE);
     //}
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok) {
-        ok = Process_GetTemplatePaths(proc, open_file_paths, _OpenFile);
-        if (! ok) {
-            Log_MsgP1(MSG_INIT_PATHS, _OpenFile, proc->pid);
-            return FALSE;
-        }
+    ok = Process_GetTemplatePaths(proc, open_file_paths, _OpenFile);
+    if (! ok) {
+        Log_MsgP1(MSG_INIT_PATHS, _OpenFile, proc->pid);
+        return FALSE;
     }
-#else
-    for (i = 0; openpipes[i] && ok; ++i) {
-        ok = Process_AddPath(
-            proc, open_file_paths, NULL, TRUE, openpipes[i], FALSE);
-    }
-
-    if (ok && proc->bAppCompartment) {
-        for (i = 0; openPipesCM[i] && ok; ++i) {
-            ok = Process_AddPath(
-                proc, open_file_paths, NULL, TRUE, openPipesCM[i], FALSE);
-        }
-    }
-#endif
 
     if (! ok) {
         Log_MsgP1(MSG_INIT_PATHS, _OpenPipe, proc->pid);
@@ -783,27 +643,8 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
     //
 
     ok = Process_GetPaths(proc, closed_file_paths, proc->box->name, _ClosedPath, TRUE);
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, closed_file_paths, _ClosedPath);
-#else
-    
-    if (ok) {
-        // the LanmanRedirector/Mup devices (when accessed without extra paths)
-        // is a security attack, and must be closed
-        ok = Process_AddPath(proc, closed_file_paths, NULL,
-                             TRUE, File_Redirector, FALSE);
-        if (ok) {
-            ok = Process_AddPath(proc, closed_file_paths, NULL,
-                                 TRUE, File_Mup, FALSE);
-        }
-    }
 
-    if(Conf_Get_Boolean(proc->box->name, L"BlockWinRM", 0, TRUE))
-    for (i = 0; strWinRMFiles[i] && ok; ++i) {
-        ok = Process_AddPath(proc, closed_file_paths, _ClosedPath, TRUE, strWinRMFiles[i], FALSE);
-    }
-#endif
+    ok = Process_GetTemplatePaths(proc, closed_file_paths, _ClosedPath);
 
     if (! ok) {
         Log_MsgP1(MSG_INIT_PATHS, _ClosedPath, proc->pid);
@@ -820,10 +661,7 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
 #endif
         ok = Process_GetPaths(proc, read_file_paths, proc->box->name, _ReadPath, TRUE);
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, read_file_paths, _ReadPath);
-#endif
+    ok = Process_GetTemplatePaths(proc, read_file_paths, _ReadPath);
 
     if (! ok) {
         Log_MsgP1(MSG_INIT_PATHS, _ReadPath, proc->pid);
@@ -837,17 +675,13 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
 #ifdef USE_MATCH_PATH_EX
     ok = Process_GetPaths(proc, write_file_paths, proc->box->name, _WritePath, TRUE);
 
-#ifdef USE_TEMPLATE_PATHS
-    if (ok)
-        ok = Process_GetTemplatePaths(proc, write_file_paths, _WritePath);
-#endif
+    ok = Process_GetTemplatePaths(proc, write_file_paths, _WritePath);
 
-    if (ok && proc->use_privacy_mode) { // in privacy mode all drive paths are set to "write"
-        for (i = 0; drive_devices[i] && ok; ++i) {
-            ok = Process_AddPath(proc, write_file_paths, NULL, 
-                                    TRUE, drive_devices[i], FALSE);
-        }
-    }
+    //
+    // (dynamic-box-arch) privacy boxes write their own WriteFilePath=... keys
+    // (e.g. the drive devices below) into the box section; the old
+    // UsePrivacyMode-driven "all drives are write paths" shortcut is gone.
+    //
 #else
     ok = Process_GetPaths2(
             proc, write_file_paths, closed_file_paths,
@@ -881,32 +715,18 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
             &is_open, &is_closed);
 
         if (is_closed && !proc->AllowInternetAccess) {
-#ifdef USE_TEMPLATE_PATHS
             ok = Process_GetPaths(proc, closed_file_paths, L"TemplateNetworkPaths", _ClosedPath, FALSE);
             if (! ok) {
                 Log_MsgP1(MSG_INIT_PATHS, _ClosedPath, proc->pid);
                 return FALSE;
             }
-#else
-            for (i = 0; closedNetPipes[i] && ok; ++i) {
-                ok = Process_AddPath(
-                    proc, closed_file_paths, NULL, TRUE, closedNetPipes[i], FALSE);
-            }
-#endif
         }
         else {
-#ifdef USE_TEMPLATE_PATHS
             ok = Process_GetPaths(proc, open_file_paths, L"TemplateNetworkPaths", _OpenFile, FALSE);
             if (! ok) {
                 Log_MsgP1(MSG_INIT_PATHS, _OpenFile, proc->pid);
                 return FALSE;
             }
-#else
-            for (i = 0; openNetPipes[i] && ok; ++i) {
-                ok = Process_AddPath(
-                    proc, open_file_paths, NULL, TRUE, openNetPipes[i], FALSE);
-            }
-#endif
         }
     }
 
@@ -919,26 +739,25 @@ _FX BOOLEAN File_InitPaths(PROCESS *proc,
     if (ok && proc->restrict_devices) {
 
         //
-        // many 3rd party drivers are a great attack vector to gain execution in the kernel, 
+        // many 3rd party drivers are a great attack vector to gain execution in the kernel,
         // so we close all typical endpoints except a selected few.
         //
 
-#ifndef USE_TEMPLATE_PATHS
-        ok = Process_AddPath(proc, closed_file_paths, NULL, FALSE, File_Device, TRUE);
+        //
+        // (dynamic-box-arch) device close/whitelist rules come from the box
+        // section:  RestrictDevices=y + ClosedFilePath=\Device\* +
+        // NormalFilePath=<approved device> keys (see examples/hardened.kv);
+        // the hardcoded approved-device list is gone with the template mode
+        // branches.
+        //
 
-        if (ok) {
-            for (i = 0; approved_devices[i] && ok; ++i) {
-                ok = Process_AddPath(
-                    proc, normal_file_paths, NULL, FALSE, approved_devices[i], FALSE);
-            }
-        }
-#endif
+        // when in privacy mode the KV WriteFilePath=... shadow rules
+        // overrule these normal entries (write list is matched first),
+        // so drive paths are unconditionally "normal" here:
 
-        if (ok && !proc->use_privacy_mode) { // when not in privacy mode we need to set drive paths to "normal"
-            for (i = 0; drive_devices[i] && ok; ++i) {
-                ok = Process_AddPath(
-                    proc, normal_file_paths, NULL, FALSE, drive_devices[i], FALSE);
-            }
+        for (i = 0; drive_devices[i] && ok; ++i) {
+            ok = Process_AddPath(
+                proc, normal_file_paths, NULL, FALSE, drive_devices[i], FALSE);
         }
 
         if (ok && !proc->file_block_network_files) {

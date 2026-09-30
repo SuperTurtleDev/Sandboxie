@@ -120,8 +120,6 @@ struct _PROCESS {
 
     BOOLEAN change_notify_token_flag;
 
-    BOOLEAN bAppCompartment;
-
     BOOLEAN in_pca_job;
     BOOLEAN can_use_jobs;
 
@@ -134,13 +132,11 @@ struct _PROCESS {
     BOOLEAN always_close_for_boxed;
     BOOLEAN dont_open_for_boxed;
     BOOLEAN protect_host_images;
-    BOOLEAN use_security_mode;
     BOOLEAN is_locked_down;
     BOOLEAN open_all_nt;
 #ifdef USE_MATCH_PATH_EX
     BOOLEAN restrict_devices;
     BOOLEAN use_rule_specificity;
-    BOOLEAN use_privacy_mode;
 #endif
     BOOLEAN confidential_box;
 
