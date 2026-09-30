@@ -6,6 +6,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SbieCore", "SbieCore\SbieCo
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sbie-cli", "sbie-cli\sbie-cli.vcxproj", "{7D3F8B41-A5E6-4F9C-8A1B-4C6E9D2F0B23}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sbie-rt", "sbie-cli\v3\sbie-rt.vcxproj", "{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -20,6 +22,10 @@ Global
 		{7D3F8B41-A5E6-4F9C-8A1B-4C6E9D2F0B23}.Debug|x64.Build.0 = Debug|x64
 		{7D3F8B41-A5E6-4F9C-8A1B-4C6E9D2F0B23}.Release|x64.ActiveCfg = Release|x64
 		{7D3F8B41-A5E6-4F9C-8A1B-4C6E9D2F0B23}.Release|x64.Build.0 = Release|x64
+		{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}.Debug|x64.ActiveCfg = Debug|x64
+		{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}.Debug|x64.Build.0 = Debug|x64
+		{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}.Release|x64.ActiveCfg = Release|x64
+		{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

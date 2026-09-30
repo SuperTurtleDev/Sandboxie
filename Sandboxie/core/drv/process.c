@@ -29,6 +29,7 @@
 #include "ipc.h"
 #include "api.h"
 #include "dll.h"
+#include "box_dynamic.h"
 #ifndef _M_ARM64
 #include "hook.h"
 #endif
@@ -644,6 +645,15 @@ _FX PROCESS *Process_Create(
         Process_CreateTerminated(ProcessId, box->session_id);
         return NULL;
     }
+
+    //
+    // dynamic-box-arch:  count every process that enters a dynamic box
+    // (API_BOX_EXEC roots, descendants started from inside the box, and
+    // forced processes alike), so auto-teardown on "last process gone"
+    // sees children too
+    //
+
+    BoxDynamic_OnProcessCreate(proc->box->name);
 
     //
     // initialize process creation time and integrity level
@@ -1506,6 +1516,13 @@ _FX void Process_NotifyProcess_Delete(HANDLE ProcessId)
     if (ProcessId == Api_ServiceProcessId)
         Api_ResetServiceProcess();
 
+    //
+    // dynamic-box-arch:  if the exiting process created dynamic boxes,
+    // destroy them now (kill + teardown), so a dead owner leaks nothing
+    //
+
+    BoxDynamic_OnAnyProcessExit(ProcessId);
+
     Process_Delete(ProcessId);
     Session_Cancel(ProcessId);
 }
@@ -1569,6 +1586,15 @@ _FX void Process_Delete(HANDLE ProcessId)
             Thread_ReleaseProcess(proc);
 
             Token_ReleaseProcess(proc);
+
+            //
+            // dynamic-box-arch:  decrement the live-process count of the
+            // dynamic box and tear it down when the count reaches zero;
+            // must run while proc->box is still valid, i.e. before the
+            // process pool is deleted
+            //
+
+            BoxDynamic_OnProcessDelete(proc);
 
             Pool_Delete(proc->pool);
         }

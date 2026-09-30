@@ -1,0 +1,22 @@
+# sbie-rt example dynamic box configuration (dynamic-box-arch)
+#
+# Feed to:  sbie-rt create dynamic-box.kv
+#
+# This is the KV stream API_BOX_CREATE parses.  Any Sandboxie.ini box
+# setting is legal here; lines '#' / ';' are comments, repeated keys
+# append (list semantics).  Enabled=y is forced by the driver when not
+# supplied.  The %SANDBOX% variable expands to the generated box name
+# (BoxConfig_<id>), %USER% / %SID% / %SESSION% to the box identity
+# captured at create time.
+
+# --- box roots (the defaults below mirror the classic ini defaults) ---
+FileRootPath=\??\%SystemDrive%\Sandbox\%USER%\%SANDBOX%
+KeyRootPath=\REGISTRY\USER\Sandbox_%USER%_%SANDBOX%
+IpcRootPath=\Sandbox\%USER%\%SANDBOX%\Session_%SESSION%
+
+# --- example policy settings ---
+#OpenIpcPath=*\BaseNamedObjects*\MySharedMutex
+#ClosedFilePath=\Device\SomeDevice
+#NetworkAccess=open    # TemplateNetworkPaths preset: open | block
+#DropAdminRights=y
+NoAutoExit=y

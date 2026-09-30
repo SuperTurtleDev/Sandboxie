@@ -3,6 +3,7 @@
   <ItemGroup>
     <ClCompile Include="api.c" />
     <ClCompile Include="box.c" />
+    <ClCompile Include="box_dynamic.c" />
     <ClCompile Include="conf.c" />
     <ClCompile Include="conf_expand.c" />
     <ClCompile Include="conf_user.c" />
@@ -166,6 +167,7 @@
     <ClInclude Include="api_defs.h" />
     <ClInclude Include="api_flags.h" />
     <ClInclude Include="box.h" />
+    <ClInclude Include="box_dynamic.h" />
     <ClInclude Include="conf.h" />
     <ClInclude Include="driver.h" />
     <ClInclude Include="gui.h" />

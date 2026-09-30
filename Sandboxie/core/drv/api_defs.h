@@ -167,6 +167,12 @@ enum {
     API_UPDATE_CONF,
     API_VERIFY,
 
+    // dynamic-box-arch: dynamic sandbox management API (docs/12-dynamic-arch.md)
+    // appended at the end of the enum -- do NOT reorder existing entries
+    API_BOX_CREATE,                           // 0x12340050
+    API_BOX_EXEC,                             // 0x12340051
+    API_BOX_DESTROY,                          // 0x12340052
+
     API_LAST
 };
 
@@ -500,6 +506,42 @@ API_ARGS_FIELD(ULONG ,param_size)
 API_ARGS_FIELD(ULONG* ,param_size_out)
 API_ARGS_FIELD(BOOLEAN ,param_verify)
 API_ARGS_CLOSE(API_SECURE_PARAM_ARGS)
+
+
+//---------------------------------------------------------------------------
+// Parameter Structures for the dynamic sandbox API (dynamic-box-arch)
+//---------------------------------------------------------------------------
+
+
+// config_text:  UTF-16 KV stream, "Key=Value" lines separated by
+//               \r\n or \n; '#' starts a comment; repeated keys append
+//               (list semantics); maximum length 64 KB.  FileRootPath
+//               and other path keys are specified here.
+
+API_ARGS_BEGIN(API_BOX_CREATE_ARGS)
+API_ARGS_FIELD(UNICODE_STRING64 *, config_text)    // in  : KV config stream
+API_ARGS_FIELD(ULONG64 *, box_handle)              // out : dynamic box handle
+API_ARGS_FIELD(WCHAR *, box_name)                  // out : WCHAR[BOXNAME_COUNT]
+API_ARGS_CLOSE(API_BOX_CREATE_ARGS)
+
+
+// process_id:   pid of a process the caller already created suspended.
+//               The driver claims it into the dynamic box (mirrors the
+//               Process_Api_Start / RunSandboxedStartProcess contract);
+//               the caller resumes the thread only on STATUS_SUCCESS.
+
+API_ARGS_BEGIN(API_BOX_EXEC_ARGS)
+API_ARGS_FIELD(ULONG64, box_handle)                // in  : dynamic box handle
+API_ARGS_FIELD(HANDLE, process_id)                 // in  : suspended target pid
+API_ARGS_FIELD(BOOLEAN, fake_admin)                // in  : grant fake admin
+API_ARGS_FIELD(ULONG64 *, out_process_id)          // out : confirmed pid (opt)
+API_ARGS_CLOSE(API_BOX_EXEC_ARGS)
+
+
+API_ARGS_BEGIN(API_BOX_DESTROY_ARGS)
+API_ARGS_FIELD(ULONG64, box_handle)                // in  : dynamic box handle
+API_ARGS_FIELD(ULONG, kill_processes)              // in  : nonzero = terminate
+API_ARGS_CLOSE(API_BOX_DESTROY_ARGS)
 
 #undef API_ARGS_BEGIN
 #undef API_ARGS_FIELD

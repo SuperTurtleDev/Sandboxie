@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Sandboxie-OSS — sbie-cli 控制台工程（05-build.md §2 规约）
-     v143 / C++20 / x64 / Unicode / wmain / 链接 SbieCore.lib；
-     零附加导入库（不链接 SbieDll.lib / ntdll.lib）。
-     注意（对 05 §1 目录树的偏离）：本 vcxproj 位于 sbie-cli\ 子目录内。 -->
+<!-- Sandboxie-OSS — sbie-cli/v3 sbie-rt 控制台工程（docs/12-dynamic-arch.md）
+     动态沙盒架构最小测试工具：create / exec / destroy 直调 IOCTL。
+     v143 / C++17 / x64 / Unicode / wmain；单文件，无 SbieDll、无 ntdll.lib
+     （ntdll 动态绑定），与 sbie-cli 工程完全独立，可单独部署到
+     ValidationOS / SbieRT 环境。 -->
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -16,8 +17,8 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <ProjectGuid>{7D3F8B41-A5E6-4F9C-8A1B-4C6E9D2F0B23}</ProjectGuid>
-    <RootNamespace>sbiecli</RootNamespace>
+    <ProjectGuid>{3E8A9C7D-1B4F-4A6E-9D52-7C0B8E3F5A66}</ProjectGuid>
+    <RootNamespace>sbinert</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -38,20 +39,17 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
-    <OutDir>$(MSBuildThisFileDirectory)..\x64\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildThisFileDirectory)..\obj\$(ProjectName)\$(Configuration)\</IntDir>
-    <TargetName>sbie-cli</TargetName>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\x64\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\obj\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>sbie-rt</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-      <Zc__cplusplus>true</Zc__cplusplus>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError Condition="'$(Configuration)'=='Release'">true</TreatWarningAsError>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>_WIN32_WINNT=0x0A00;WIN32;_WINDOWS;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\vendor;$(MSBuildThisFileDirectory)..\SbieCore;$(MSBuildThisFileDirectory)..\sbie-cli;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -63,22 +61,12 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <TargetMachine>MachineX64</TargetMachine>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <!-- 源文件列表采用目录通配（相对本 vcxproj 目录递归），多 agent 并行新增文件时无需编辑本工程文件 -->
   <ItemGroup>
-    <ClInclude Include="**\*.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <!-- v3\ is the standalone sbie-rt tool with its own vcxproj -->
-    <ClCompile Include="**\*.cpp" Exclude="v3\**" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\SbieCore\SbieCore.vcxproj">
-      <Project>{5b1e6a20-9c4d-4e8a-b7f0-2a3d5c8e9a01}</Project>
-    </ProjectReference>
+    <ClCompile Include="sbie-rt.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

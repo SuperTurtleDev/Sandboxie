@@ -136,6 +136,43 @@ NTSTATUS Conf_Api_Set(PROCESS *proc, ULONG64 *parms);
 
 
 //---------------------------------------------------------------------------
+// Dynamic box configuration (dynamic-box-arch, docs/12-dynamic-arch.md)
+//---------------------------------------------------------------------------
+
+
+// Conf_CreateTempSection:  create an empty runtime section in Conf_Data
+// (is_virtual=TRUE so it survives Conf_Read reloads).  The section must
+// not already exist.  Takes Conf_Lock exclusively.
+
+NTSTATUS Conf_CreateTempSection(const WCHAR *section_name);
+
+// Conf_AddTempSetting:  append one Key/Value pair to a temp section.
+// Repeated names are legal (list semantics, like ini).  The section must
+// have been created by Conf_CreateTempSection.  Takes Conf_Lock.
+
+NTSTATUS Conf_AddTempSetting(
+    const WCHAR *section_name, const WCHAR *setting_name, const WCHAR *value);
+
+// Conf_DeleteTempSection:  remove a temp section created above.  Refuses
+// to delete a section that is not marked is_virtual (safety guard against
+// wiping a section that came from an ini file).  Takes Conf_Lock.
+
+NTSTATUS Conf_DeleteTempSection(const WCHAR *section_name);
+
+// Conf_HasSection:  TRUE if the section currently exists in Conf_Data.
+// Call without holding Conf_Lock (takes it shared internally).
+
+BOOLEAN Conf_HasSection(const WCHAR *section_name);
+
+// Conf_InstallEmbeddedSkeleton:  ensure the [TemplateDefaultPaths] and
+// [TemplateNetworkPaths] skeleton sections exist in Conf_Data, creating
+// them from compiled-in defaults when absent (no ini file needed).
+// Called from Conf_Init after Conf_Read.
+
+BOOLEAN Conf_InstallEmbeddedSkeleton(void);
+
+
+//---------------------------------------------------------------------------
 
 
 #endif // _MY_CONF_H

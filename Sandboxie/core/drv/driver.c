@@ -46,6 +46,7 @@
 #include "token.h"
 #include "wfp.h"
 #include "dyn_data.h"
+#include "box_dynamic.h"
 
 NTSTATUS File_TranslateSymlinks(WCHAR *name, ULONG max_len);
 
@@ -250,6 +251,14 @@ _FX NTSTATUS DriverEntry(
 
     if (ok)
         ok = Process_Init();
+
+    //
+    // dynamic-box-arch:  dynamic sandbox management (needs the process
+    // list from Process_Init; registers API_BOX_CREATE/EXEC/DESTROY)
+    //
+
+    if (ok)
+        ok = BoxDynamic_Init();
 
     if (ok)
         ok = Thread_Init();
@@ -862,6 +871,7 @@ _FX void SbieDrv_DriverUnload(DRIVER_OBJECT *DriverObject)
         WFP_Unload();
         Session_Unload();
         Dll_Unload();
+        BoxDynamic_Unload();
         Conf_Unload();
         Api_Unload();
         Process_Unload(TRUE);
